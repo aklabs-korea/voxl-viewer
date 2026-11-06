@@ -148,6 +148,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     /// clipboard's change count then.
     var heldClip: (body: Any, change: Int)?
     var resignedKey = Date.distantPast
+    var changeAtResign = 0
 
     init(machine: Machine, onClose: @escaping (MachineWindow) -> Void) {
         self.machine = machine
@@ -357,14 +358,20 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         guard m.name == "clip", isOrigin(m.frameInfo.securityOrigin, of: machine.url) else { return }
         // In front, or just left (Cmd+C on the remote, then Cmd+Tab): write it now. Otherwise keep
         // it for when the window comes back, unless something is copied on the Mac meanwhile.
-        if window.isKeyWindow || Date().timeIntervalSince(resignedKey) < 1 {
+        let change = NSPasteboard.general.changeCount
+        if window.isKeyWindow {
             writeClipboard(m.body)
+        } else if Date().timeIntervalSince(resignedKey) < 1 {
+            if change == changeAtResign { writeClipboard(m.body) } // else a newer Mac copy wins
         } else {
-            heldClip = (m.body, NSPasteboard.general.changeCount)
+            heldClip = (m.body, change)
         }
     }
 
-    func windowDidResignKey(_ note: Notification) { resignedKey = Date() }
+    func windowDidResignKey(_ note: Notification) {
+        resignedKey = Date()
+        changeAtResign = NSPasteboard.general.changeCount
+    }
 
     func windowDidBecomeKey(_ note: Notification) {
         if let held = heldClip, held.change == NSPasteboard.general.changeCount { writeClipboard(held.body) }
