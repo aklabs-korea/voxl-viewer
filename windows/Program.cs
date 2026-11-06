@@ -24,16 +24,25 @@ static class Program
         // A second launch has the right to come to the front (it was just clicked); pass it on to
         // the first process, which shows the window.
         AllowSetForegroundWindow(-1); // ASFW_ANY
-        new App().Run(args);
+        try
+        {
+            new App(singleInstance: true).Run(args);
+        }
+        catch (CantStartSingleInstanceException)
+        {
+            // .NET's instance pipe is one per machine, so while another Windows account runs the
+            // viewer this one can't join it: run on its own instead.
+            new App(singleInstance: false).Run(args);
+        }
     }
 
     sealed class App : WindowsFormsApplicationBase
     {
         Machine? first;
 
-        public App()
+        public App(bool singleInstance)
         {
-            IsSingleInstance = true;
+            IsSingleInstance = singleInstance;
             ShutdownStyle = ShutdownMode.AfterAllFormsClose;
             EnableVisualStyles = true;
             HighDpiMode = HighDpiMode.PerMonitorV2;
@@ -48,9 +57,12 @@ static class Program
 
         protected override void OnCreateMainForm() => MainForm = Open(first!);
 
-        // Not the base: it would bring up whichever window is the main one.
+        // Not the base: it would bring up whichever window is the main one. Before the first window
+        // is up this runs on a pool thread, where no window can live, so a launch that lands while
+        // the app is still starting is dropped: the starting instance opens its own window.
         protected override void OnStartupNextInstance(StartupNextInstanceEventArgs e)
         {
+            if (MainForm is null || MainForm.InvokeRequired) return;
             if (FirstMachine(e.CommandLine.ToArray()) is { } machine) Open(machine);
         }
     }

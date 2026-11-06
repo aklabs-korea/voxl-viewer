@@ -47,11 +47,15 @@ func voxlURL(_ text: String) -> URL? {
     return c.url
 }
 
-/// The URL without its query, for names that end up on disk: a ?token= is voxl's password.
-func withoutQuery(_ url: URL) -> String {
-    var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
-    c?.query = nil
-    return c?.url?.absoluteString ?? url.absoluteString
+/// The URL without a ?token=, which is voxl's password, for names that end up on disk. Other query
+/// options stay, so machines that differ only in those keep apart.
+func withoutToken(_ url: URL) -> String {
+    guard var c = URLComponents(url: url, resolvingAgainstBaseURL: false), let items = c.queryItems else {
+        return url.absoluteString
+    }
+    let kept = items.filter { $0.name != "token" }
+    c.queryItems = kept.isEmpty ? nil : kept
+    return c.url?.absoluteString ?? url.absoluteString
 }
 
 /// Whether a frame comes from the machine's own voxl: same scheme, host (in any case) and port.
@@ -129,7 +133,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         didSet {
             window.title = machine.name
             if machine.url != oldValue.url {
-                window.setFrameAutosaveName("voxl " + withoutQuery(machine.url))
+                window.setFrameAutosaveName("voxl " + withoutToken(machine.url))
                 load()
             }
         }
@@ -140,6 +144,10 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     let onClose: (MachineWindow) -> Void
     var stats = false
     var retryLater: DispatchWorkItem?
+    /// A copy from the remote that arrived while the window was in the background, and the Mac
+    /// clipboard's change count then.
+    var heldClip: (body: Any, change: Int)?
+    var resignedKey = Date.distantPast
 
     init(machine: Machine, onClose: @escaping (MachineWindow) -> Void) {
         self.machine = machine
@@ -159,15 +167,9 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
           const clip = navigator.clipboard;
           if (!clip) return;
           const post = (m) => window.webkit.messageHandlers.clip.postMessage(m);
-          // As in a browser: no writes while the window is in the background. voxl keeps a refused
-          // write and sends it again when the window gets focus back.
-          const focused = () => {
-            if (!document.hasFocus()) throw new DOMException('Document is not focused.', 'NotAllowedError');
-          };
-          clip.writeText = async (t) => { focused(); return post(String(t)); };
+          clip.writeText = async (t) => post(String(t));
           const write = clip.write ? clip.write.bind(clip) : null;
           clip.write = async (items) => {
-            focused();
             for (const item of items) {
               if (item.types.includes('text/plain'))
                 return post(await (await item.getType('text/plain')).text());
@@ -195,7 +197,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         window.collectionBehavior = [.fullScreenPrimary]
         window.delegate = self
         window.center()
-        window.setFrameAutosaveName("voxl " + withoutQuery(machine.url))
+        window.setFrameAutosaveName("voxl " + withoutToken(machine.url))
         window.makeKeyAndOrderFront(nil)
         load()
     }
@@ -353,11 +355,28 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         // Only voxl's own page may write the Mac's clipboard.
         guard m.name == "clip", isOrigin(m.frameInfo.securityOrigin, of: machine.url) else { return }
+        // In front, or just left (Cmd+C on the remote, then Cmd+Tab): write it now. Otherwise keep
+        // it for when the window comes back, unless something is copied on the Mac meanwhile.
+        if window.isKeyWindow || Date().timeIntervalSince(resignedKey) < 1 {
+            writeClipboard(m.body)
+        } else {
+            heldClip = (m.body, NSPasteboard.general.changeCount)
+        }
+    }
+
+    func windowDidResignKey(_ note: Notification) { resignedKey = Date() }
+
+    func windowDidBecomeKey(_ note: Notification) {
+        if let held = heldClip, held.change == NSPasteboard.general.changeCount { writeClipboard(held.body) }
+        heldClip = nil
+    }
+
+    func writeClipboard(_ body: Any) {
         let board = NSPasteboard.general
-        if let text = m.body as? String {
+        if let text = body as? String {
             board.clearContents()
             board.setString(text, forType: .string)
-        } else if let png = (m.body as? [String: Any])?["png"] as? String, let data = Data(base64Encoded: png) {
+        } else if let png = (body as? [String: Any])?["png"] as? String, let data = Data(base64Encoded: png) {
             board.clearContents()
             board.setData(data, forType: .png)
         }
