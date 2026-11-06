@@ -144,11 +144,12 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     let onClose: (MachineWindow) -> Void
     var stats = false
     var retryLater: DispatchWorkItem?
-    /// A copy from the remote that arrived while the window was in the background, and the Mac
-    /// clipboard's change count then.
-    var heldClip: (body: Any, change: Int)?
+    /// The remote's latest copy that arrived while the window was in the background.
+    var heldClip: Any?
     var resignedKey = Date.distantPast
-    var changeAtResign = 0
+    /// The Mac clipboard's change count when the window left, or after the viewer's own last write:
+    /// any other count means something was copied on the Mac since.
+    var ownChange = 0
 
     init(machine: Machine, onClose: @escaping (MachineWindow) -> Void) {
         self.machine = machine
@@ -356,25 +357,27 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         // Only voxl's own page may write the Mac's clipboard.
         guard m.name == "clip", isOrigin(m.frameInfo.securityOrigin, of: machine.url) else { return }
-        // In front, or just left (Cmd+C on the remote, then Cmd+Tab): write it now. Otherwise keep
-        // it for when the window comes back, unless something is copied on the Mac meanwhile.
-        let change = NSPasteboard.general.changeCount
+        // In front: write it. In the background, a copy on the Mac since the window left always wins;
+        // otherwise write it now if the window only just left (Cmd+C on the remote, then Cmd+Tab),
+        // or when it comes back.
         if window.isKeyWindow {
             writeClipboard(m.body)
+        } else if NSPasteboard.general.changeCount != ownChange {
+            heldClip = nil
         } else if Date().timeIntervalSince(resignedKey) < 1 {
-            if change == changeAtResign { writeClipboard(m.body) } // else a newer Mac copy wins
+            writeClipboard(m.body)
         } else {
-            heldClip = (m.body, change)
+            heldClip = m.body
         }
     }
 
     func windowDidResignKey(_ note: Notification) {
         resignedKey = Date()
-        changeAtResign = NSPasteboard.general.changeCount
+        ownChange = NSPasteboard.general.changeCount
     }
 
     func windowDidBecomeKey(_ note: Notification) {
-        if let held = heldClip, held.change == NSPasteboard.general.changeCount { writeClipboard(held.body) }
+        if let held = heldClip, NSPasteboard.general.changeCount == ownChange { writeClipboard(held) }
         heldClip = nil
     }
 
@@ -387,6 +390,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
             board.clearContents()
             board.setData(data, forType: .png)
         }
+        ownChange = board.changeCount
     }
 
     func windowWillClose(_ note: Notification) {
