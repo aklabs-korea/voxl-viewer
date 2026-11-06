@@ -83,11 +83,14 @@ static class StartMenu
 {
     static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "voxl viewer");
 
-    static string PathFor(Machine m)
+    // The entry's file name for a machine name: two machines whose names give the same one would share it.
+    public static string FileName(string machineName)
     {
-        var name = string.Concat(m.Name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim(' ', '.');
-        return Path.Combine(Folder, (name.Length > 0 ? name : "voxl") + ".lnk");
+        var name = string.Concat(machineName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim(' ', '.');
+        return (name.Length > 0 ? name : "voxl") + ".lnk";
     }
+
+    static string PathFor(Machine m) => Path.Combine(Folder, FileName(m.Name));
 
     public static void Add(Machine m)
     {

@@ -32,10 +32,11 @@ fi
 dir="${SHORTCUT_DIR:-$HOME/Applications/voxl viewer}"
 app="$dir/$name.app"
 
-# Its own bundle id, so macOS treats it as its own app: the main id plus the name in
-# lowercase letters and digits (or a hash of the name if it has none of those).
+# Its own bundle id, so macOS treats it as its own app: the main id plus the name in lowercase
+# letters and digits, and a hash of the exact name, so "My Mac" and "My-Mac" stay two apps.
 slug=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9' '-' | tr -s '-' | sed 's/^-//; s/-$//')
-[ -n "$slug" ] || slug=$(printf '%s' "$name" | md5 | cut -c1-12)
+hash=$(printf '%s' "$name" | md5 | cut -c1-8)
+slug=${slug:+$slug-}$hash
 base=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$src/Contents/Info.plist")
 
 mkdir -p "$dir"

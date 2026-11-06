@@ -101,7 +101,15 @@ sealed class MachineDialog : SmallDialog
         }
         // Quotes would break the Start-menu shortcut's arguments.
         var label = name.Text.Trim().Replace('"', '\'');
-        result = new Machine(label.Length > 0 ? label : new Uri(address).Host, address, isMac.Checked, cpu.Checked);
+        if (label.Length == 0) label = new Uri(address).Host;
+        // Each machine's Start-menu entry is named after it, so names must differ.
+        if (Settings.Load().Machines.Find(m => m.Url != originalUrl && string.Equals(StartMenu.FileName(m.Name),
+                StartMenu.FileName(label), StringComparison.OrdinalIgnoreCase)) is { } same)
+        {
+            Complain($"\"{same.Name}\" is already the name of another machine. Pick another name.");
+            return false;
+        }
+        result = new Machine(label, address, isMac.Checked, cpu.Checked);
         return true;
     }
 }

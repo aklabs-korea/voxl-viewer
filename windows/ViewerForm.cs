@@ -26,6 +26,7 @@ sealed class ViewerForm : Form
     WinKeys? winKeys;
     bool stats, fullScreen, f11Down, retrying, forget;
     long f11Time;
+    int loads; // successful page loads, so a retry scheduled before one is dropped
     FormWindowState savedState;
     Rectangle savedBounds;
     int menuBase = -1;
@@ -121,6 +122,7 @@ sealed class ViewerForm : Form
     {
         if (e.IsSuccess && e.HttpStatusCode < 500)
         {
+            loads++;
             Text = machine.Name;
             answered = false;
             if (pendingLogin is { } login)
@@ -144,9 +146,11 @@ sealed class ViewerForm : Form
         if (retrying) return;
         retrying = true;
         Text = machine.Name + " (waiting for voxl)";
+        var seen = loads;
         await Task.Delay(5000);
         retrying = false;
-        if (!IsDisposed && Core is { } core) core.Navigate(PageUrl());
+        // A reload in the meantime may have worked: don't cut that session off.
+        if (loads == seen && !IsDisposed && Core is { } core) core.Navigate(PageUrl());
     }
 
     // voxl may ask for its password (HTTP Basic). A saved one is tried first; the dialog runs after
@@ -210,7 +214,8 @@ sealed class ViewerForm : Form
 
     void OnWebKeyUp(object? sender, KeyEventArgs e)
     {
-        if (e.KeyCode != Keys.F11) return;
+        // Only the release of an F11 handled here: Shift+F11 and the like went to the remote, press and release.
+        if (e.KeyCode != Keys.F11 || !f11Down) return;
         e.Handled = true;
         f11Down = false;
     }

@@ -468,6 +468,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVali
                     note = "Enter the whole address, starting with https:// or http://."
                     continue
                 }
+                if u != start?.url, let other = Machine.saved.first(where: { $0.url == u }) {
+                    note = "That address is already saved as \"\(other.name)\"."
+                    continue
+                }
                 return .save(Machine(name: name.isEmpty ? u.host! : name, url: u))
             case .alertThirdButtonReturn:
                 return .remove
