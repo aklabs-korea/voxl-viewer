@@ -1,8 +1,14 @@
-// For a Mac machine: the Mac's Control key is the PC's Win key (voxl sends Win as Control and Ctrl
-// as Cmd to a Mac). Windows normally keeps Win combos for itself (Win+C, Win+R, Win+Space, ...),
-// so while the window is in front, a low-level keyboard hook swallows Win and every key pressed
-// with it, and replays them into voxl's page through the DevTools protocol. Those are trusted
-// events that skip the IME, so with a Korean layout Win+C never becomes a Hangul letter.
+// The keyboard while a viewer window is in front, through a low-level keyboard hook:
+// - Win+Alt+1..9 go to the window's screens: 1 and 2 always, 3..9 when the machine has that
+//   screen (otherwise the keys go on as usual).
+// - Keys other programs inject go nowhere. voxl on this PC types what someone viewing the PC
+//   types; in front of this window that would go on to the remote, which may be showing this PC,
+//   and a key could bounce PC -> remote -> PC forever.
+// - For a Mac machine, the Mac's Control key is the PC's Win key (voxl sends Win as Control and
+//   Ctrl as Cmd to a Mac). Windows normally keeps Win combos for itself (Win+C, Win+R,
+//   Win+Space, ...), so the hook swallows Win and every key pressed with it, and replays them into
+//   voxl's page through the DevTools protocol. Those are trusted events that skip the IME, so with
+//   a Korean layout Win+C never becomes a Hangul letter, and they never pass through the hook.
 // Windows keeps Win+L and Ctrl+Alt+Del whatever a hook does.
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
@@ -48,10 +54,15 @@ sealed class WinKeys : IDisposable
     volatile IntPtr hook;
     volatile uint hookThread;
     public volatile IntPtr FormHandle;
+    public volatile bool Mac;                 // the machine is a Mac: Win is its Control key
+    public volatile int Rows;                 // the machine's screens, for Win+Alt+3..9
 
     readonly object sync = new();
     readonly HashSet<uint> held = new();      // keys down right now, as the hook saw them
     readonly HashSet<uint> swallowed = new(); // keys whose key-down Windows never saw: their key-up goes the same way
+    readonly HashSet<uint> switching = new(); // the digit of a Win+Alt+N: its key-up goes nowhere either
+    readonly HashSet<uint> bounced = new();   // injected keys dropped: their key-ups too
+    readonly HashSet<uint> injected = new();  // injected keys let through: their repeats and key-ups too
     readonly ConcurrentQueue<Key> queue = new();
     int pending;                              // replays queued but not yet in the page
     bool draining;
@@ -87,13 +98,11 @@ sealed class WinKeys : IDisposable
             {
                 var k = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
                 var msg = (int)wParam;
-                // Keys other programs inject pass untouched.
-                if ((k.flags & LLKHF_INJECTED) == 0)
-                {
-                    bool swallow;
-                    lock (sync) swallow = Decide(k.vkCode, k.scanCode, msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
-                    if (swallow) return 1;
-                }
+                var down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+                bool swallow;
+                lock (sync)
+                    swallow = (k.flags & LLKHF_INJECTED) != 0 ? DecideInjected(k.vkCode, down) : Decide(k.vkCode, k.scanCode, down);
+                if (swallow) return 1;
             }
         }
         catch (Exception)
@@ -103,24 +112,36 @@ sealed class WinKeys : IDisposable
         return CallNextHookEx(hook, code, wParam, lParam);
     }
 
-    // On the hook thread, under the lock. true: Windows never sees this key event.
+    bool InFront => FormHandle != IntPtr.Zero && GetForegroundWindow() == FormHandle;
+
+    // On the hook thread, under the lock, for the keyboard's own keys. true: Windows never sees
+    // this key event.
     bool Decide(uint vk, uint scan, bool down)
     {
         if (!down)
         {
             held.Remove(vk);
+            if (switching.Remove(vk)) return true;
             if (!swallowed.Remove(vk)) return false;
             Enqueue(vk, scan, false, false);
             return true;
         }
         if (!held.Add(vk)) // autorepeat
         {
+            if (switching.Contains(vk)) return true;
             // Windows keeps the repeats of a key whose key-down it saw, or it would think the key is stuck.
             if (!swallowed.Contains(vk)) return false;
             if (vk is not (VK_LWIN or VK_RWIN)) Enqueue(vk, scan, true, true);
             return true;
         }
-        if (FormHandle == IntPtr.Zero || GetForegroundWindow() != FormHandle) return false;
+        if (!InFront) return false;
+        if (SwitchRow(vk) is { } row)
+        {
+            switching.Add(vk);
+            Post(() => form.SwitchTo(row));
+            return true;
+        }
+        if (!Mac) return false;
         if (vk is VK_HANGUL or VK_HANJA or VK_PROCESSKEY) return false; // the IME's own keys
         var winHeld = swallowed.Contains(VK_LWIN) || swallowed.Contains(VK_RWIN);
         // While replays are still on their way, later keys join them: a key typed right after a Win
@@ -134,9 +155,39 @@ sealed class WinKeys : IDisposable
         return false;
     }
 
-    // The viewer lost the focus (Alt+Tab, a dialog) or the session locked: release in the page
-    // whatever the hook holds back, and forget every key. Windows never saw the swallowed
-    // key-downs, so letting their key-ups through later changes nothing there.
+    // Win+Alt and a digit 1..9, nothing else held: the screen's row (0-based), when it's the viewer's.
+    int? SwitchRow(uint vk)
+    {
+        if (vk is < 0x31 or > 0x39) return null;
+        if (!Held(VK_LWIN, VK_RWIN) || !Held(VK_LMENU, VK_RMENU) || Held(VK_LCONTROL, VK_RCONTROL) || Held(VK_LSHIFT, VK_RSHIFT))
+            return null;
+        var row = (int)(vk - 0x31);
+        return row < 2 || row < Rows ? row : null;
+    }
+
+    // On the hook thread, under the lock, for keys another program injected. While the window is in
+    // front they go nowhere; a key's repeats and key-up go the way its key-down went, so Windows
+    // never sees a key stuck down.
+    bool DecideInjected(uint vk, bool down)
+    {
+        if (!down)
+        {
+            injected.Remove(vk);
+            return bounced.Remove(vk);
+        }
+        if (bounced.Contains(vk)) return true;
+        if (injected.Contains(vk) || !InFront)
+        {
+            injected.Add(vk);
+            return false;
+        }
+        bounced.Add(vk);
+        return true;
+    }
+
+    // The viewer lost the focus (Alt+Tab, a dialog), the session locked or the machine stopped
+    // being a Mac: release in the page whatever the hook holds back, and forget every key. Windows
+    // never saw the swallowed key-downs, so letting their key-ups through later changes nothing there.
     public void Reset()
     {
         lock (sync)
@@ -144,6 +195,9 @@ sealed class WinKeys : IDisposable
             foreach (var vk in swallowed) Enqueue(vk, 0, false, false);
             swallowed.Clear();
             held.Clear();
+            switching.Clear();
+            bounced.Clear();
+            injected.Clear();
         }
     }
 
@@ -180,7 +234,8 @@ sealed class WinKeys : IDisposable
         {
             try
             {
-                if (form.Core is { } core && Json(k) is { } json)
+                // Not into a page still loading, which may be the screen being left.
+                if (form.TakesKeys && form.Core is { } core && Json(k) is { } json)
                     await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", json);
             }
             catch (Exception)

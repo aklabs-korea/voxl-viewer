@@ -1,32 +1,73 @@
-// One machine's window. It hosts voxl's page in WebView2 and adds only what a browser tab can't do:
+// One machine's window. It shows one of the machine's screens at a time, in voxl's own page in
+// WebView2, and adds only what a browser tab can't do:
+// - Win+Alt+1..9 (WinKeys.cs) and a tab at the window's edge (Switcher.cs) go to the machine's
+//   screens, Full or Sharp; a chip in the middle names the screen while it connects;
 // - WebView2's browser shortcuts are off, so Ctrl+W/T/R/F5 reach the remote machine;
 // - for a Mac, the Win key reaches the page as the Mac's Control key (WinKeys.cs);
 // - F11 is borderless full screen; the window menu (click the icon or right-click the title bar)
-//   has the machines, Reload and voxl's stats overlay;
+//   has the machines, Settings, Reload and voxl's stats overlay;
 // - voxl's password can be kept in Windows Credential Manager;
-// - the page loads again while the machine is unreachable or answers 5xx.
+// - a screen that doesn't answer is tried again every 3 s, and never swapped for another by itself.
 using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using WinScreen = System.Windows.Forms.Screen;
 
 namespace VoxlViewer;
 
 sealed class ViewerForm : Form
 {
     // Window-menu commands (Windows keeps the low four bits of WM_SYSCOMMAND for itself).
-    const int CmdAdd = 0x1100, CmdEdit = 0x1110, CmdRemove = 0x1120, CmdStartMenu = 0x1130;
+    const int CmdAdd = 0x1100, CmdSettings = 0x1110, CmdRemove = 0x1120, CmdStartMenu = 0x1130;
     const int CmdFullScreen = 0x1200, CmdReload = 0x1210, CmdStats = 0x1220;
     const int CmdMachine = 0x2000, MaxMachines = 200; // CmdMachine + 16 * index
 
+    // What the page script below posts once a screen's picture is on.
+    const string Picture = "voxl-viewer:picture";
+
+    // Runs in each page before voxl's own scripts.
+    // - voxl's toolbar has a Full screen button whenever the page can go full screen. WebView2's
+    //   page full screen only fills the window and ends on the next Esc, which belongs to the
+    //   remote, so hide the button, as WebKit does on the Mac: F11 is this app's full screen.
+    // - Keys typed while a screen connects would land on a screen nobody has seen yet: they go
+    //   nowhere until its picture plays (voxl shows it in <video>s), or for 3 s. Before its page
+    //   has loaded, the view is hidden and takes no keys at all (ShowView).
+    const string PageScript = $$"""
+        Object.defineProperty(Document.prototype, 'fullscreenEnabled', { get: () => false });
+        if (window === window.top) {
+          let hold = true, told = false;
+          const drop = (e) => { if (hold) { e.stopImmediatePropagation(); e.preventDefault(); } };
+          for (const type of ['keydown', 'keyup', 'keypress', 'input', 'compositionend', 'paste'])
+            addEventListener(type, drop, true);
+          setTimeout(() => { hold = false; }, 3000);
+          addEventListener('playing', () => {
+            hold = false;
+            if (!told) { told = true; window.chrome?.webview?.postMessage('{{Picture}}'); }
+          }, true);
+        }
+        """;
+
+    // Each decode choice is its own WebView2 browser process, with its own data folder.
     static readonly Dictionary<bool, Task<CoreWebView2Environment>> environments = new();
     static Icon? appIcon;
 
     Machine machine;
-    readonly WebView2 web = new() { Dock = DockStyle.Fill };
+    int row;                    // the screen on show
+    WebView2 web;
+    bool started;               // this view's WebView2 is up
+    bool viewCpu;               // whether this view decodes on the CPU: fixed when it started
+    string? shownUrl;           // the screen page the view was last sent to, without ?stats
+    bool loading;               // that page hasn't loaded yet: the view is hidden
+    bool down;                  // that page didn't answer: the view is hidden while it's tried again
+    bool starting;              // Connect asked for that page and its load hasn't started yet
+    ulong navigation;           // the load started last: only its end says how the screen is
     WinKeys? winKeys;
-    bool stats, fullScreen, f11Down, retrying, forget;
+    readonly Chip chip;
+    readonly Switcher switcher;
+    SettingsForm? settings;
+    bool stats, fullScreen, f11Down, forget;
     long f11Time;
-    int retryId; // bumped by each success and each scheduled retry: only the latest retry runs
+    int retryId; // bumped by each success, connect and scheduled retry: only the latest retry runs
     FormWindowState savedState;
     Rectangle savedBounds;
     int menuBase = -1;
@@ -38,28 +79,93 @@ sealed class ViewerForm : Form
     public ViewerForm(Machine machine)
     {
         this.machine = machine;
-        stats = new Uri(machine.Url).Query.TrimStart('?').Split('&').Any(IsStats);
-        Text = machine.Name;
+        stats = new Uri(machine.Screens[0].Url).Query.TrimStart('?').Split('&').Any(IsStats);
+        BackColor = Color.Black; // what shows while the view is hidden
         Icon = appIcon ??= Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        chip = new Chip(this);
+        switcher = new Switcher(this);
+        web = NewView();
+        UpdateTitle();
         PlaceWindow();
         Controls.Add(web);
-        web.KeyDown += OnWebKeyDown;
-        web.KeyUp += OnWebKeyUp;
     }
 
     public Machine Machine => machine;
+    public int Row => row;
+    public bool FullScreen => fullScreen;
     public CoreWebView2? Core => web.CoreWebView2;
 
-    protected override async void OnLoad(EventArgs e)
+    // Whether the page shown is the screen's, loaded: replayed keys (WinKeys.cs) go nowhere else.
+    public bool TakesKeys => started && !loading && !down;
+
+    // The picture's place on the screen: the window's client area.
+    public Rectangle PictureArea => RectangleToScreen(ClientRectangle);
+
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+
+    public bool InFront => IsHandleCreated && WindowState != FormWindowState.Minimized && GetForegroundWindow() == Handle;
+
+    // Pixels on this window's monitor for a size at 100%.
+    public int Px(int size) => (int)Math.Round(size * DeviceDpi / 96.0);
+
+    public string ScreenLabel(int i) => $"{i + 1} · {machine.Screens[i].Name}";
+
+    public static string Shortcut(int i) => i < 9 ? $"Win+Alt+{i + 1}" : "";
+
+    Screen ShownScreen => machine.Screens[row];
+    bool UsesSharp => Prefs.Sharp && machine.HasSharp;
+    // Sharp always decodes on the GPU; Full on the CPU when the machine asks for it.
+    bool Cpu => machine.CpuDecode && !UsesSharp;
+    string ScreenUrl => UsesSharp ? ShownScreen.Sharp! : ShownScreen.Url;
+
+    WebView2 NewView()
+    {
+        var view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
+        view.KeyDown += OnWebKeyDown;
+        view.KeyUp += OnWebKeyUp;
+        return view;
+    }
+
+    protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+        winKeys = new WinKeys(this, Handle) { Mac = machine.IsMac, Rows = machine.Screens.Count };
+        var name = machine.Name;
+        Settings.Change(s => s.Last = name);
+        StartView();
+    }
+
+    // Starts this window's WebView2 and connects the screen on show.
+    async void StartView()
+    {
+        var view = web;
+        viewCpu = Cpu;
         try
         {
-            await web.EnsureCoreWebView2Async(await WebEnvironment(machine.CpuDecode));
+            await view.EnsureCoreWebView2Async(await WebEnvironment(viewCpu));
+            if (IsDisposed || view != web) return;
+            var core = view.CoreWebView2;
+            var options = core.Settings;
+            options.AreBrowserAcceleratorKeysEnabled = false;
+            options.AreDefaultContextMenusEnabled = false;
+            options.IsStatusBarEnabled = false;
+            options.IsZoomControlEnabled = false;
+            options.IsPinchZoomEnabled = false;
+            options.IsSwipeNavigationEnabled = false;
+            options.IsGeneralAutofillEnabled = false;
+            options.IsPasswordAutosaveEnabled = false;
+            options.IsReputationCheckingRequired = false; // SmartScreen would send each URL to Microsoft
+            options.IsBuiltInErrorPageEnabled = false; // a screen that doesn't answer shows black and the chip
+            core.BasicAuthenticationRequested += OnBasicAuth;
+            core.NavigationStarting += OnNavigationStarting;
+            core.NavigationCompleted += OnNavigationCompleted;
+            core.WebMessageReceived += OnWebMessage;
+            core.ProcessFailed += OnProcessFailed;
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
         }
         catch (Exception ex)
         {
-            if (IsDisposed) return;
+            if (IsDisposed || view != web) return;
             var help = ex is WebView2RuntimeNotFoundException
                 ? "\n\nvoxl viewer needs the Microsoft Edge WebView2 Runtime: https://developer.microsoft.com/microsoft-edge/webview2/"
                 : "";
@@ -67,30 +173,9 @@ sealed class ViewerForm : Form
             Close();
             return;
         }
-        if (IsDisposed) return;
-        var core = web.CoreWebView2;
-        var options = core.Settings;
-        options.AreBrowserAcceleratorKeysEnabled = false;
-        options.AreDefaultContextMenusEnabled = false;
-        options.IsStatusBarEnabled = false;
-        options.IsZoomControlEnabled = false;
-        options.IsPinchZoomEnabled = false;
-        options.IsSwipeNavigationEnabled = false;
-        options.IsGeneralAutofillEnabled = false;
-        options.IsPasswordAutosaveEnabled = false;
-        options.IsReputationCheckingRequired = false; // SmartScreen would send each URL to Microsoft
-        core.BasicAuthenticationRequested += OnBasicAuth;
-        core.NavigationCompleted += OnNavigationCompleted;
-        SetMacKeys(machine.IsMac);
-        // voxl's toolbar has a Full screen button whenever the page can go full screen. WebView2's
-        // page full screen only fills the window and ends on the next Esc, which belongs to the
-        // remote, so hide the button, as WebKit does on the Mac: F11 is this app's full screen.
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(
-            "Object.defineProperty(Document.prototype, 'fullscreenEnabled', { get: () => false });");
-        if (IsDisposed) return;
-        var url = machine.Url;
-        Settings.Change(s => s.Last = url);
-        core.Navigate(PageUrl());
+        if (IsDisposed || view != web) return;
+        started = true;
+        Connect(row);
     }
 
     // The decode choice belongs to WebView2's browser process, so each has its own data folder.
@@ -105,7 +190,22 @@ sealed class ViewerForm : Form
         return task;
     }
 
-    string PageUrl() => WithStats(machine.Url, stats);
+    // Video decode is fixed when WebView2 starts, so a change to it (Full | Sharp, Decode on the
+    // CPU) starts a new view in this window: its place, full screen and screen stay.
+    void RestartView()
+    {
+        var old = web;
+        web = NewView();
+        Controls.Add(web);
+        Controls.Remove(old);
+        old.Dispose();
+        started = false;
+        starting = true; // the old view's loads say nothing now
+        shownUrl = null;
+        pendingLogin = null;
+        ShowView();
+        StartView();
+    }
 
     // voxl's page with or without its ?stats overlay; other parameters such as ?token= stay.
     internal static string WithStats(string url, bool stats)
@@ -119,18 +219,110 @@ sealed class ViewerForm : Form
 
     static bool IsStats(string part) => part == "stats" || part.StartsWith("stats=");
 
+    // ------------------------------------------------------------------ screens
+
+    // Sends the view to screen `to`. Until its page has loaded the view is hidden (black, and no
+    // keys reach the page being left), so a screen slow to answer never shows the old one under
+    // its name. The chip names it until its picture is on, or for 3 s once its page has loaded; a
+    // retry of a screen that isn't answering keeps the chip that says so.
+    void Connect(int to, bool retry = false)
+    {
+        row = Math.Clamp(to, 0, machine.Screens.Count - 1);
+        retryId++;
+        UpdateTitle();
+        if (!retry) chip.Say(ScreenLabel(row), 0);
+        if (Core is not { } core) return; // StartView connects once WebView2 is up
+        loading = true;
+        ShowView();
+        shownUrl = ScreenUrl;
+        answered = false;
+        starting = true;
+        core.Navigate(WithStats(shownUrl, stats));
+    }
+
+    // Win+Alt+N, or a screen in the switcher's panel. The screen on show only shows its name again.
+    public void SwitchTo(int to)
+    {
+        if (to >= machine.Screens.Count) chip.Say($"{machine.Name} has no screen {to + 1}", 1500);
+        else if (to != row) Connect(to);
+        else if (!down && !loading) chip.Say(ScreenLabel(row), 900);
+    }
+
+    // The ticked screen in the panel, or Reload: the screen on show again, for a stuck picture.
+    public void Reconnect() => Connect(row);
+
+    // Full | Sharp is one choice for every window; each one whose machine has Sharp streams follows.
+    public static void SetSharp(bool on)
+    {
+        if (on == Prefs.Sharp) return;
+        Prefs.SetSharp(on);
+        foreach (var window in Program.Windows.ToList()) window.ApplyView();
+    }
+
+    // A change from Settings: the machine as saved, and where the screen on show is now.
+    public void Apply(Machine now, int nowRow)
+    {
+        machine = now;
+        row = Math.Clamp(nowRow, 0, now.Screens.Count - 1);
+        if (winKeys is not null)
+        {
+            if (winKeys.Mac && !now.IsMac) winKeys.Reset();
+            winKeys.Mac = now.IsMac;
+            winKeys.Rows = now.Screens.Count;
+        }
+        ApplyView();
+    }
+
+    // After a change to the machine or to Full | Sharp: a new view if its decode changed, the
+    // screen again if its address did. Nothing else reconnects.
+    void ApplyView()
+    {
+        UpdateTitle();
+        if (Cpu != viewCpu) RestartView();
+        else if (shownUrl is not null && ScreenUrl != shownUrl) Connect(row);
+    }
+
+    // "M3 · top · Sharp": the machine, the screen (left out when it's the only one and named the
+    // same) and Full or Sharp when the machine has the choice.
+    void UpdateTitle()
+    {
+        var text = machine.Name;
+        if (machine.Screens.Count > 1 || ShownScreen.Name != machine.Name) text += " · " + ShownScreen.Name;
+        if (machine.HasSharp) text += UsesSharp ? " · Sharp" : " · Full";
+        Text = down ? text + " (not answering)" : text;
+    }
+
+    public void OpenSettings()
+    {
+        if (settings is { IsDisposed: false })
+        {
+            settings.Activate();
+            return;
+        }
+        settings = new SettingsForm(this);
+        settings.Show(this);
+    }
+
     // ------------------------------------------------------------------ loading and passwords
 
-    // The machine is offline, or voxl restarts behind a proxy that answers 502: try again (voxl's
-    // page reconnects on its own once it has loaded). Not for a wrong password, a bad certificate
-    // or a missing page, which no retry fixes.
+    // Connect's load, or one the page starts itself (a redirect keeps its load's id).
+    void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+    {
+        starting = false;
+        navigation = e.NavigationId;
+    }
+
     async void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
+        // A load cut short by the next one (a switch, a retry), or one that ends after Connect asked
+        // for the next, says nothing about the screen on show.
+        if (starting || e.NavigationId != navigation) return;
+        // Cut short while the page is on show, as a download from voxl's Files panel is: nothing
+        // changed. Connect's own load cut short is tried again, below.
+        if (e.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled && !loading) return;
         if (e.IsSuccess && e.HttpStatusCode < 500)
         {
             retryId++; // a retry still waiting is dropped; a later failure schedules its own
-            retrying = false;
-            Text = machine.Name;
             answered = false;
             if (pendingLogin is { } login)
             {
@@ -138,27 +330,79 @@ sealed class ViewerForm : Form
                 else Credentials.Delete(login.Target);
                 pendingLogin = null;
             }
+            if (Loaded(answering: true)) chip.Say(ScreenLabel(row), 0);
+            chip.FadeBy(3000); // sooner when the picture comes (OnWebMessage)
             return;
         }
+        // No retry fixes a wrong password, a bad certificate or a missing page.
         if (e.HttpStatusCode < 500 && (e.HttpStatusCode >= 400 || e.WebErrorStatus is
-                CoreWebView2WebErrorStatus.OperationCanceled
-                or CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired
+                CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired
                 or CoreWebView2WebErrorStatus.ValidProxyAuthenticationRequired
                 or CoreWebView2WebErrorStatus.CertificateCommonNameIsIncorrect
                 or CoreWebView2WebErrorStatus.CertificateExpired
                 or CoreWebView2WebErrorStatus.CertificateIsInvalid
                 or CoreWebView2WebErrorStatus.CertificateRevoked
                 or CoreWebView2WebErrorStatus.ClientCertificateContainsErrors))
+        {
+            Loaded(answering: true);
+            chip.Say(Problem(e), 0);
             return;
-        if (retrying) return;
-        retrying = true;
-        Text = machine.Name + " (waiting for voxl)";
+        }
+        // The machine is offline, voxl restarts behind a proxy that answers 502, or the load was cut
+        // short with nothing after it: black and the chip while it's tried again (voxl's page
+        // reconnects on its own once it has loaded).
+        Loaded(answering: false);
+        chip.Say(NotAnswering(), 0);
         var id = ++retryId;
-        await Task.Delay(5000);
-        // A reload in the meantime may have worked: don't cut that session off.
-        if (id != retryId) return;
-        retrying = false;
-        if (!IsDisposed && Core is { } core) core.Navigate(PageUrl());
+        await Task.Delay(3000);
+        // A switch or a reload in the meantime may have worked: don't cut that session off.
+        if (id != retryId || IsDisposed) return;
+        Connect(row, retry: true);
+    }
+
+    // The page loaded, or didn't answer: the view shows it, or stays hidden while it's tried
+    // again. true when the screen answers again after not answering.
+    bool Loaded(bool answering)
+    {
+        var back = down && answering;
+        var changed = down == answering;
+        loading = false;
+        down = !answering;
+        ShowView();
+        if (changed) UpdateTitle();
+        return back;
+    }
+
+    string Problem(CoreWebView2NavigationCompletedEventArgs e)
+    {
+        var name = ShownScreen.Name;
+        if (e.HttpStatusCode == 401 || e.WebErrorStatus is CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired
+                or CoreWebView2WebErrorStatus.ValidProxyAuthenticationRequired)
+            return $"{name} wants voxl's password. Reload to sign in.";
+        return e.HttpStatusCode >= 400 ? $"{name} answered {e.HttpStatusCode}." : $"{name}'s certificate isn't valid.";
+    }
+
+    // With the way to the first screen, or to the second when the first is the one down.
+    string NotAnswering()
+    {
+        var text = $"{ShownScreen.Name} isn't answering. Trying again every 3 s.";
+        var other = row != 0 ? 0 : machine.Screens.Count > 1 ? 1 : -1;
+        return other < 0 ? text : $"{text}\n{Shortcut(other)}: {machine.Screens[other].Name}";
+    }
+
+    // The page script's word that the picture is on: the chip goes. Only from the screen on show.
+    void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (down || shownUrl is null || e.WebMessageAsJson != "\"" + Picture + "\"") return;
+        if (Uri.TryCreate(e.Source, UriKind.Absolute, out var from) && Uri.Compare(from, new Uri(shownUrl),
+                UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) == 0)
+            chip.FadeBy(0);
+    }
+
+    // With WebView2's error pages off, a page whose process died would stay black: load it again.
+    void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
+    {
+        if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited) BeginInvoke(Reconnect);
     }
 
     // voxl may ask for its password (HTTP Basic). A saved one is tried first; the dialog runs after
@@ -228,18 +472,12 @@ sealed class ViewerForm : Form
         f11Down = false;
     }
 
-    void SetMacKeys(bool on)
+    // F11 while the view is hidden (a screen that isn't answering) comes to the window itself.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (on && winKeys is null)
-        {
-            winKeys = new WinKeys(this, Handle);
-        }
-        else if (!on && winKeys is not null)
-        {
-            winKeys.Reset();
-            winKeys.Dispose();
-            winKeys = null;
-        }
+        if (keyData != Keys.F11) return base.ProcessCmdKey(ref msg, keyData);
+        if (((long)msg.LParam & 0x40000000) == 0) ToggleFullScreen(); // not an autorepeat
+        return true;
     }
 
     // ------------------------------------------------------------------ window menu
@@ -258,15 +496,15 @@ sealed class ViewerForm : Form
         if (menuBase < 0) menuBase = GetMenuItemCount(menu);
         while (GetMenuItemCount(menu) > menuBase) DeleteMenu(menu, (uint)menuBase, MF_BYPOSITION);
         menuMachines = Settings.Load().Machines.Take(MaxMachines).ToList();
-        var saved = menuMachines.Any(m => m.Url == machine.Url);
+        var saved = menuMachines.Any(m => m.Name == machine.Name);
         AppendMenu(menu, MF_SEPARATOR, 0, null);
         for (var i = 0; i < menuMachines.Count; i++)
         {
             var m = menuMachines[i];
-            AppendMenu(menu, m.Url == machine.Url ? MF_CHECKED : MF_STRING, (nuint)(CmdMachine + 16 * i), m.Name.Replace("&", "&&"));
+            AppendMenu(menu, m.Name == machine.Name ? MF_CHECKED : MF_STRING, (nuint)(CmdMachine + 16 * i), m.Name.Replace("&", "&&"));
         }
         AppendMenu(menu, MF_STRING, CmdAdd, "Add machine...");
-        AppendMenu(menu, MF_STRING, CmdEdit, saved ? "Edit this machine..." : "Save this machine...");
+        AppendMenu(menu, MF_STRING, CmdSettings, "Settings...");
         AppendMenu(menu, saved ? MF_STRING : MF_GRAYED, CmdRemove, "Remove this machine...");
         AppendMenu(menu, MF_STRING, CmdStartMenu, "Add this machine to the Start menu");
         AppendMenu(menu, MF_SEPARATOR, 0, null);
@@ -307,92 +545,54 @@ sealed class ViewerForm : Form
             {
                 if (Program.AddMachine(this) is { } added) Program.Open(added);
             },
-            CmdEdit => EditMachine,
+            CmdSettings => OpenSettings,
             CmdRemove => RemoveMachine,
             CmdStartMenu => AddToStartMenu,
             CmdFullScreen => ToggleFullScreen,
-            CmdReload => () =>
-            {
-                answered = false;
-                Core?.Navigate(PageUrl());
-            },
+            CmdReload => Reconnect,
             CmdStats => () =>
             {
                 stats = !stats;
-                Core?.Navigate(PageUrl());
+                Connect(row);
             },
             _ => null,
         };
     }
 
-    void EditMachine()
-    {
-        var saved = Settings.Load().Find(machine.Url) is not null;
-        using var dialog = new MachineDialog(saved ? "Edit machine" : "Save machine", machine);
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        var old = machine;
-        var now = dialog.Result;
-        Settings.Change(s =>
-        {
-            var i = s.Machines.FindIndex(m => m.Url == old.Url);
-            if (i >= 0) s.Machines[i] = now;
-            else s.Machines.Add(now);
-            if (now.Url != old.Url && s.Windows.Remove(old.Url, out var place)) s.Windows[now.Url] = place;
-        });
-        Try(() => StartMenu.Update(old, now));
-        if (now.Url != old.Url || now.CpuDecode != old.CpuDecode)
-        {
-            Program.Reopen(this, now);
-            return;
-        }
-        machine = now;
-        Text = now.Name;
-        SetMacKeys(now.IsMac);
-    }
-
     void RemoveMachine()
     {
-        var question = $"Remove \"{machine.Name}\"? Its window closes, and its Start-menu entry and saved password go too.";
+        var question = $"Remove \"{machine.Name}\"? Its window closes, and its Start-menu entry and saved passwords go too.";
         if (MessageBox.Show(this, question, "Remove machine", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        var url = machine.Url;
-        var target = Credentials.Target(new Uri(url));
-        var shared = false;
+        if (settings is { IsDisposed: false }) settings.Close(); // first, so an edit it holds can't save the machine again
+        var name = machine.Name;
+        var kept = new HashSet<string>();
         Settings.Change(s =>
         {
-            s.Machines.RemoveAll(m => m.Url == url);
-            s.Windows.Remove(url);
-            if (s.Last == url) s.Last = null;
-            shared = s.Machines.Any(m => Credentials.Target(new Uri(m.Url)) == target);
+            s.Machines.RemoveAll(m => m.Name == name);
+            s.Windows.Remove(name);
+            if (s.Last == name) s.Last = null;
+            foreach (var m in s.Machines) kept.UnionWith(Targets(m));
         });
-        if (!shared) Credentials.Delete(target);
-        Try(() => StartMenu.Update(machine, null));
+        // A password another machine uses stays.
+        foreach (var target in Targets(machine).Except(kept)) Credentials.Delete(target);
+        StartMenu.Try(this, () => StartMenu.Update(machine, null));
         forget = true;
         Close();
     }
+
+    // The Credential Manager entries a machine's screens would use.
+    static IEnumerable<string> Targets(Machine m) =>
+        m.Screens.SelectMany(s => new[] { s.Url, s.Sharp }).OfType<string>().Select(u => Credentials.Target(new Uri(u))).Distinct();
 
     void AddToStartMenu()
     {
         var m = machine;
         Settings.Change(s =>
         {
-            if (s.Find(m.Url) is null) s.Machines.Add(m);
+            if (s.Find(m.Name) is null) s.Machines.Add(m);
         });
-        if (Try(() => StartMenu.Add(m)))
+        if (StartMenu.Try(this, () => StartMenu.Add(m)))
             MessageBox.Show(this, $"\"{m.Name}\" is in the Start menu, in the voxl viewer folder.", Text);
-    }
-
-    bool Try(Action action)
-    {
-        try
-        {
-            action();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "The Start-menu entry couldn't be changed: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return false;
-        }
     }
 
     // ------------------------------------------------------------------ window
@@ -400,9 +600,9 @@ sealed class ViewerForm : Form
     // Where this machine's window was last time; maximized the first time.
     void PlaceWindow()
     {
-        var place = Settings.Load().Windows.GetValueOrDefault(machine.Url);
+        var place = Settings.Load().Windows.GetValueOrDefault(machine.Name);
         var bounds = place is null ? Rectangle.Empty : new Rectangle(place.X, place.Y, place.Width, place.Height);
-        if (bounds.Width >= 200 && bounds.Height >= 150 && Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(bounds)))
+        if (bounds.Width >= 200 && bounds.Height >= 150 && WinScreen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(bounds)))
         {
             StartPosition = FormStartPosition.Manual;
             Bounds = bounds;
@@ -419,15 +619,8 @@ sealed class ViewerForm : Form
     {
         var bounds = fullScreen ? savedBounds : WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         var maximized = fullScreen ? savedState == FormWindowState.Maximized : WindowState == FormWindowState.Maximized;
-        var url = machine.Url;
-        Settings.Change(s => s.Windows[url] = new Place(bounds.X, bounds.Y, bounds.Width, bounds.Height, maximized));
-    }
-
-    // Before Program.Reopen: the new window opens where this one is.
-    public void Retarget(Machine now)
-    {
-        machine = now;
-        SavePlace();
+        var name = machine.Name;
+        Settings.Change(s => s.Windows[name] = new Place(bounds.X, bounds.Y, bounds.Width, bounds.Height, maximized));
     }
 
     public void BringUp()
@@ -438,7 +631,7 @@ sealed class ViewerForm : Form
 
     // Borderless over the whole monitor. Not the page's own fullscreen, which WebView2 leaves on a
     // single Esc that the remote machine should get.
-    void ToggleFullScreen()
+    public void ToggleFullScreen()
     {
         if (!fullScreen)
         {
@@ -446,7 +639,7 @@ sealed class ViewerForm : Form
             savedBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             WindowState = FormWindowState.Normal;
             FormBorderStyle = FormBorderStyle.None;
-            Bounds = Screen.FromControl(this).Bounds;
+            Bounds = WinScreen.FromControl(this).Bounds;
         }
         else
         {
@@ -465,17 +658,44 @@ sealed class ViewerForm : Form
         BuildMenu();
     }
 
-    // voxl stops the video while its page is hidden, but WebView2 only hides when told.
+    // voxl stops the video while its page is hidden, but WebView2 only hides when told. A page
+    // still loading, or a screen that isn't answering, shows black (this window) instead; not
+    // before the view's WebView2 is up, which it might not do in a hidden control.
+    void ShowView()
+    {
+        var show = WindowState != FormWindowState.Minimized && (!started || (!loading && !down));
+        if (web.Visible == show) return;
+        // Hidden, the view could keep the focus (its window is WebView2's) and still type into the
+        // page being left: the window itself takes the keys meanwhile, F11 among them.
+        if (!show && InFront)
+        {
+            ActiveControl = null;
+            Focus();
+        }
+        web.Visible = show;
+        if (show && InFront) web.Focus();
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        web.Visible = WindowState != FormWindowState.Minimized;
+        ShowView();
+        chip.Place();
+        switcher.HideAll();
+    }
+
+    protected override void OnMove(EventArgs e)
+    {
+        base.OnMove(e);
+        chip.Place();
+        switcher.HideAll();
     }
 
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
         web.Focus();
+        switcher.Start();
     }
 
     protected override void OnDeactivate(EventArgs e)
@@ -494,6 +714,7 @@ sealed class ViewerForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         winKeys?.Dispose();
+        switcher.Dispose();
         base.OnFormClosed(e);
     }
 }
