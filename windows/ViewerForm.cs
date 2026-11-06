@@ -82,6 +82,12 @@ sealed class ViewerForm : Form
         core.BasicAuthenticationRequested += OnBasicAuth;
         core.NavigationCompleted += OnNavigationCompleted;
         SetMacKeys(machine.IsMac);
+        // voxl's toolbar has a Full screen button whenever the page can go full screen. WebView2's
+        // page full screen only fills the window and ends on the next Esc, which belongs to the
+        // remote, so hide the button, as WebKit does on the Mac: F11 is this app's full screen.
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            "Object.defineProperty(Document.prototype, 'fullscreenEnabled', { get: () => false });");
+        if (IsDisposed) return;
         var url = machine.Url;
         Settings.Change(s => s.Last = url);
         core.Navigate(PageUrl());
@@ -272,7 +278,9 @@ sealed class ViewerForm : Form
     protected override void WndProc(ref Message m)
     {
         const int WM_SYSCOMMAND = 0x112, WM_INITMENU = 0x116, SC_KEYMENU = 0xF100;
-        if (m.Msg == WM_INITMENU && m.WParam == GetSystemMenu(Handle, false)) BuildMenu();
+        // Every time: opened from the icon, the menu arrives inside a wrapper with another handle,
+        // and this window has no other menu.
+        if (m.Msg == WM_INITMENU) BuildMenu();
         if (m.Msg == WM_SYSCOMMAND)
         {
             var id = (int)(m.WParam.ToInt64() & 0xFFF0);

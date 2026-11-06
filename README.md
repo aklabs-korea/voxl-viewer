@@ -140,15 +140,17 @@ voxl asks for a password unless it runs with `--enable-basic-auth=false`.
 The app asks for a user name (optional) and the password, and can remember them for that host:
 
 - **Mac**: tick **Save in Keychain**. To forget it, delete "voxl viewer (host:port)" in
-  Keychain Access.
+  Keychain Access. Each launcher, and each new unsigned build, is a new app to macOS: the first
+  time it uses a saved password, macOS asks for your Mac's login password. Click **Always Allow**.
 - **Windows**: tick **Remember it in Windows Credential Manager**. To forget it, remove
   "voxl viewer: https://host:port" under Windows Credentials in Credential Manager.
 
 These passwords stay out of the apps' settings files.
 
 A `?token=` link also works, such as `https://my-mac.example.ts.net:6901/?token=...`. The token
-is then part of the URL, so it is saved wherever the URL is: the app's settings and any launcher
-you make.
+is then part of the URL, so it is saved wherever the URL is: the app's settings, any launcher
+you make, and the web view's cache. Removing the machine doesn't erase all of those, so change
+voxl's password if a token link gets out.
 
 ## Privacy
 

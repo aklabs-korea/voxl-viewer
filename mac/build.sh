@@ -45,6 +45,8 @@ sips -z 16 16 "$work/voxl.png" --out "$work/voxl.iconset/icon_16x16.png" >/dev/n
 cp "$work/voxl.png" "$work/voxl.iconset/icon_16x16@2x.png"
 cp "$work/voxl.png" "$work/voxl.iconset/icon_32x32.png"
 iconutil -c icns -o "$app/Contents/Resources/voxl.icns" "$work/voxl.iconset"
+# The licenses travel with the app (the icon's included).
+cp "$root/LICENSE" "$root/CREDITS.md" "$app/Contents/Resources/"
 
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

@@ -47,6 +47,25 @@ func voxlURL(_ text: String) -> URL? {
     return c.url
 }
 
+/// The URL without a ?token=, which is voxl's password, for names that end up on disk. Other query
+/// options stay, so machines that differ only in those keep apart.
+func withoutToken(_ url: URL) -> String {
+    guard var c = URLComponents(url: url, resolvingAgainstBaseURL: false), let items = c.queryItems else {
+        return url.absoluteString
+    }
+    let kept = items.filter { $0.name != "token" }
+    c.queryItems = kept.isEmpty ? nil : kept
+    return c.url?.absoluteString ?? url.absoluteString
+}
+
+/// Whether a frame comes from the machine's own voxl: same scheme, host (in any case) and port.
+func isOrigin(_ o: WKSecurityOrigin, of url: URL) -> Bool {
+    let scheme = url.scheme?.lowercased() ?? ""
+    let port = url.port ?? (scheme == "https" ? 443 : 80)
+    return o.protocol.lowercased() == scheme && o.host.lowercased() == url.host?.lowercased()
+        && (o.port == 0 ? (o.protocol.lowercased() == "https" ? 443 : 80) : o.port) == port
+}
+
 /// voxl passwords, saved in the login Keychain per host, port and scheme.
 enum Keychain {
     static func query(_ s: URLProtectionSpace) -> [String: Any] {
@@ -67,6 +86,16 @@ enum Keychain {
               let item = out as? [String: Any], let data = item[kSecValueData as String] as? Data,
               let password = String(data: data, encoding: .utf8) else { return nil }
         return (item[kSecAttrAccount as String] as? String ?? "", password)
+    }
+
+    /// The saved user name only. Reading attributes never makes macOS ask for the login password.
+    static func user(_ s: URLProtectionSpace) -> String? {
+        var q = query(s)
+        q[kSecReturnAttributes as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
+        return (out as? [String: Any])?[kSecAttrAccount as String] as? String
     }
 
     static func save(_ s: URLProtectionSpace, user: String, password: String) {
@@ -104,7 +133,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         didSet {
             window.title = machine.name
             if machine.url != oldValue.url {
-                window.setFrameAutosaveName("voxl " + machine.url.absoluteString)
+                window.setFrameAutosaveName("voxl " + withoutToken(machine.url))
                 load()
             }
         }
@@ -115,6 +144,12 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     let onClose: (MachineWindow) -> Void
     var stats = false
     var retryLater: DispatchWorkItem?
+    /// The remote's latest copy that arrived while the window was in the background.
+    var heldClip: Any?
+    var resignedKey = Date.distantPast
+    /// The Mac clipboard's change count when the window left, or after the viewer's own last write:
+    /// any other count means something was copied on the Mac since.
+    var ownChange = 0
 
     init(machine: Machine, onClose: @escaping (MachineWindow) -> Void) {
         self.machine = machine
@@ -164,7 +199,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         window.collectionBehavior = [.fullScreenPrimary]
         window.delegate = self
         window.center()
-        window.setFrameAutosaveName("voxl " + machine.url.absoluteString)
+        window.setFrameAutosaveName("voxl " + withoutToken(machine.url))
         window.makeKeyAndOrderFront(nil)
         load()
     }
@@ -299,7 +334,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
             : "voxl at \(space.host) asks for its password."
         let user = NSTextField(frame: NSRect(x: 0, y: 54, width: 280, height: 22))
         user.placeholderString = "User name (optional)"
-        user.stringValue = Keychain.find(space)?.user ?? ""
+        user.stringValue = Keychain.user(space) ?? ""
         let password = NSSecureTextField(frame: NSRect(x: 0, y: 26, width: 280, height: 22))
         password.placeholderString = "Password"
         let save = NSButton(checkboxWithTitle: "Save in Keychain", target: nil, action: nil)
@@ -321,15 +356,41 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         // Only voxl's own page may write the Mac's clipboard.
-        guard m.name == "clip", m.frameInfo.securityOrigin.host == machine.url.host else { return }
+        guard m.name == "clip", isOrigin(m.frameInfo.securityOrigin, of: machine.url) else { return }
+        // In front: write it. In the background, a copy on the Mac since the window left always wins;
+        // otherwise write it now if the window only just left (Cmd+C on the remote, then Cmd+Tab),
+        // or when it comes back.
+        if window.isKeyWindow {
+            writeClipboard(m.body)
+        } else if NSPasteboard.general.changeCount != ownChange {
+            heldClip = nil
+        } else if Date().timeIntervalSince(resignedKey) < 1 {
+            writeClipboard(m.body)
+        } else {
+            heldClip = m.body
+        }
+    }
+
+    func windowDidResignKey(_ note: Notification) {
+        resignedKey = Date()
+        ownChange = NSPasteboard.general.changeCount
+    }
+
+    func windowDidBecomeKey(_ note: Notification) {
+        if let held = heldClip, NSPasteboard.general.changeCount == ownChange { writeClipboard(held) }
+        heldClip = nil
+    }
+
+    func writeClipboard(_ body: Any) {
         let board = NSPasteboard.general
-        if let text = m.body as? String {
+        if let text = body as? String {
             board.clearContents()
             board.setString(text, forType: .string)
-        } else if let png = (m.body as? [String: Any])?["png"] as? String, let data = Data(base64Encoded: png) {
+        } else if let png = (body as? [String: Any])?["png"] as? String, let data = Data(base64Encoded: png) {
             board.clearContents()
             board.setData(data, forType: .png)
         }
+        ownChange = board.changeCount
     }
 
     func windowWillClose(_ note: Notification) {
@@ -418,10 +479,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVali
         case .save(let m):
             list[i] = m
             Machine.saved = list
+            if defaults.string(forKey: "lastURL") == w.machine.url.absoluteString {
+                defaults.set(m.url.absoluteString, forKey: "lastURL")
+            }
             w.machine = m
         case .remove:
             list.remove(at: i)
             Machine.saved = list
+            if defaults.string(forKey: "lastURL") == w.machine.url.absoluteString {
+                defaults.removeObject(forKey: "lastURL")
+            }
         case .cancel:
             break
         }

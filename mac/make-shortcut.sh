@@ -39,7 +39,8 @@ hash=$(printf '%s' "$name" | md5 | cut -c1-8)
 slug=${slug:+$slug-}$hash
 base=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$src/Contents/Info.plist")
 
-mkdir -p "$dir"
+# Folders made here are private: a launcher's URL may hold a ?token=, which is voxl's password.
+(umask 077; mkdir -p "$dir")
 rm -rf "$app"
 ditto --noqtn "$src" "$app"
 plist="$app/Contents/Info.plist"
