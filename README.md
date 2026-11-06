@@ -172,7 +172,7 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | Keys | What happens |
 | --- | --- |
 | Ctrl+W, Ctrl+T, Ctrl+R, F5 and other browser shortcuts | Go to the remote |
-| F11 | Full screen on or off |
+| F11 | Full screen on or off. On keyboards whose F keys are media keys, Fn+F11. The tab's panel also has **Leave full screen**. |
 | Win+Alt+1 to 9 | Screen 1 to 9 (3 to 9 when the machine has them) |
 | Win, alone or with other keys | With **This is a Mac**: go to the Mac as Control. Otherwise Windows keeps them. |
 | Alt on its own | Goes to the remote (Option on a Mac) instead of opening the window menu |

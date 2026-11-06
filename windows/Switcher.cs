@@ -345,7 +345,7 @@ sealed class PanelPane : Slide
         }
         var commands = items.Count;
         if (m.HasSharp) items.Add((false, "", "Full | Sharp", "", null, true));
-        items.Add((viewer.FullScreen, "", "Full screen", "F11", viewer.ToggleFullScreen, false));
+        items.Add((false, "", viewer.FullScreen ? "Leave full screen" : "Full screen", "F11", viewer.ToggleFullScreen, false));
         items.Add((false, "", "Settings…", "", viewer.OpenSettings, false));
 
         int pad = Pad, height = viewer.Px(26), gap = viewer.Px(24);

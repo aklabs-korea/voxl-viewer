@@ -663,7 +663,8 @@ final class Switcher: NSObject {
             pick.refusesFirstResponder = true
             items.append(pick)
         }
-        items.append(PanelRow(ticked: w.window.styleMask.contains(.fullScreen), number: "", title: "Full screen",
+        let full = w.window.styleMask.contains(.fullScreen)
+        items.append(PanelRow(ticked: false, number: "", title: full ? "Leave full screen" : "Full screen",
                               keys: "⌃⌘F") { [weak self] in
             self?.hide()
             self?.owner.window.toggleFullScreen(nil)

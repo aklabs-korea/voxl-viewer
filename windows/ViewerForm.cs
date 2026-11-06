@@ -641,6 +641,10 @@ sealed class ViewerForm : Form
             WindowState = FormWindowState.Normal;
             FormBorderStyle = FormBorderStyle.None;
             Bounds = WinScreen.FromControl(this).Bounds;
+            // Full screen hides the title bar and its menu, so say how to leave. Not over a screen's
+            // own note while it connects or isn't answering.
+            if (!loading && !down)
+                chip.Say($"Full screen. To leave, rest the pointer at the {Prefs.Edge.ToString().ToLowerInvariant()} edge and click the tab, or press F11.", 4000);
         }
         else
         {
