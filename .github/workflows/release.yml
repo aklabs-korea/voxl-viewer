@@ -135,6 +135,8 @@ jobs:
         shell: pwsh
         run: |
           Remove-Item out/win-x64/*.pdb -ErrorAction SilentlyContinue
+          Copy-Item LICENSE out/win-x64/LICENSE.txt
+          Copy-Item CREDITS.md out/win-x64/CREDITS.md
           Compress-Archive -Path out/win-x64/* -DestinationPath voxl-viewer-windows-x64.zip
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

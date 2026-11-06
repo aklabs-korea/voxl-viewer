@@ -47,6 +47,21 @@ func voxlURL(_ text: String) -> URL? {
     return c.url
 }
 
+/// The URL without its query, for names that end up on disk: a ?token= is voxl's password.
+func withoutQuery(_ url: URL) -> String {
+    var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    c?.query = nil
+    return c?.url?.absoluteString ?? url.absoluteString
+}
+
+/// Whether a frame comes from the machine's own voxl: same scheme, host (in any case) and port.
+func isOrigin(_ o: WKSecurityOrigin, of url: URL) -> Bool {
+    let scheme = url.scheme?.lowercased() ?? ""
+    let port = url.port ?? (scheme == "https" ? 443 : 80)
+    return o.protocol.lowercased() == scheme && o.host.lowercased() == url.host?.lowercased()
+        && (o.port == 0 ? (o.protocol.lowercased() == "https" ? 443 : 80) : o.port) == port
+}
+
 /// voxl passwords, saved in the login Keychain per host, port and scheme.
 enum Keychain {
     static func query(_ s: URLProtectionSpace) -> [String: Any] {
@@ -67,6 +82,16 @@ enum Keychain {
               let item = out as? [String: Any], let data = item[kSecValueData as String] as? Data,
               let password = String(data: data, encoding: .utf8) else { return nil }
         return (item[kSecAttrAccount as String] as? String ?? "", password)
+    }
+
+    /// The saved user name only. Reading attributes never makes macOS ask for the login password.
+    static func user(_ s: URLProtectionSpace) -> String? {
+        var q = query(s)
+        q[kSecReturnAttributes as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
+        return (out as? [String: Any])?[kSecAttrAccount as String] as? String
     }
 
     static func save(_ s: URLProtectionSpace, user: String, password: String) {
@@ -104,7 +129,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         didSet {
             window.title = machine.name
             if machine.url != oldValue.url {
-                window.setFrameAutosaveName("voxl " + machine.url.absoluteString)
+                window.setFrameAutosaveName("voxl " + withoutQuery(machine.url))
                 load()
             }
         }
@@ -134,9 +159,15 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
           const clip = navigator.clipboard;
           if (!clip) return;
           const post = (m) => window.webkit.messageHandlers.clip.postMessage(m);
-          clip.writeText = async (t) => post(String(t));
+          // As in a browser: no writes while the window is in the background. voxl keeps a refused
+          // write and sends it again when the window gets focus back.
+          const focused = () => {
+            if (!document.hasFocus()) throw new DOMException('Document is not focused.', 'NotAllowedError');
+          };
+          clip.writeText = async (t) => { focused(); return post(String(t)); };
           const write = clip.write ? clip.write.bind(clip) : null;
           clip.write = async (items) => {
+            focused();
             for (const item of items) {
               if (item.types.includes('text/plain'))
                 return post(await (await item.getType('text/plain')).text());
@@ -164,7 +195,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         window.collectionBehavior = [.fullScreenPrimary]
         window.delegate = self
         window.center()
-        window.setFrameAutosaveName("voxl " + machine.url.absoluteString)
+        window.setFrameAutosaveName("voxl " + withoutQuery(machine.url))
         window.makeKeyAndOrderFront(nil)
         load()
     }
@@ -299,7 +330,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
             : "voxl at \(space.host) asks for its password."
         let user = NSTextField(frame: NSRect(x: 0, y: 54, width: 280, height: 22))
         user.placeholderString = "User name (optional)"
-        user.stringValue = Keychain.find(space)?.user ?? ""
+        user.stringValue = Keychain.user(space) ?? ""
         let password = NSSecureTextField(frame: NSRect(x: 0, y: 26, width: 280, height: 22))
         password.placeholderString = "Password"
         let save = NSButton(checkboxWithTitle: "Save in Keychain", target: nil, action: nil)
@@ -321,7 +352,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         // Only voxl's own page may write the Mac's clipboard.
-        guard m.name == "clip", m.frameInfo.securityOrigin.host == machine.url.host else { return }
+        guard m.name == "clip", isOrigin(m.frameInfo.securityOrigin, of: machine.url) else { return }
         let board = NSPasteboard.general
         if let text = m.body as? String {
             board.clearContents()
@@ -418,10 +449,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVali
         case .save(let m):
             list[i] = m
             Machine.saved = list
+            if defaults.string(forKey: "lastURL") == w.machine.url.absoluteString {
+                defaults.set(m.url.absoluteString, forKey: "lastURL")
+            }
             w.machine = m
         case .remove:
             list.remove(at: i)
             Machine.saved = list
+            if defaults.string(forKey: "lastURL") == w.machine.url.absoluteString {
+                defaults.removeObject(forKey: "lastURL")
+            }
         case .cancel:
             break
         }
