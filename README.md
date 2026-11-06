@@ -16,6 +16,9 @@ This is an unofficial, independent project. It is not made or supported by Tembo
   instead of opening the Start menu.
 - **A window per machine.** Each machine gets its own window, its own Dock or Start-menu entry,
   and its window size and position remembered.
+- **A machine's screens in one window.** Each display of a machine is its own voxl page. Its
+  window shows one at a time and switches with a key or a tab at its edge, without moving,
+  resizing or rescaling anything.
 - **Clipboard both ways**, uploads and downloads through voxl's Files panel, full screen, and
   automatic retry while the remote is offline or voxl restarts.
 
@@ -62,7 +65,8 @@ stream over HTTPS or on `localhost`. To reach another machine, put voxl behind T
 On first launch the app asks for a machine:
 
 - **Name**: the window's title, such as `My Mac`.
-- **voxl URL**: such as `https://my-mac.example.ts.net:6901/` or `http://localhost:6901/`.
+- **voxl URL**: its first screen, such as `https://my-mac.example.ts.net:6901/` or
+  `http://localhost:6901/`.
 
 The Windows app has two more options:
 
@@ -73,15 +77,51 @@ The Windows app has two more options:
 
 Each machine opens in its own window. The app remembers each window's size and position.
 
+### Screens
+
+voxl streams one display per port, so a machine with two displays runs two voxls. Add the
+others in the machine's **Settings**: paste a screen's voxl link and click **Add screen**
+(Windows) or **Add Screen…** (Mac). The screen is named after voxl's `--title`, or its host and
+port; rename it in the list.
+
+The order is yours, whatever the remote machine calls its main display. Screen 1 opens with the
+window and the keys go by number. Change the order with **Move up** and **Move down**.
+
+To switch screens:
+
+- **Keys**: Control+Option+1 to 9 on the Mac, Win+Alt+1 to 9 on Windows. 1 and 2 always switch
+  screens; 3 to 9 only on a machine with that many, otherwise they go to the remote.
+- **The tab**: rest the pointer for a moment in the middle of the window's top edge, and a tab
+  slides in with the screen's name. Click it for the panel: the machine's screens, Full | Sharp,
+  Full screen and Settings. Clicking the screen on show connects it again.
+
+The tab never takes the keyboard, so typing keeps going to the remote. It doesn't come while a
+mouse button is held, and after a click at the edge, or once it has been left alone, it waits
+until the pointer leaves the edge. Pick its edge (Top, Left, Bottom or Right) in Settings; it's
+one choice for every window.
+
+A switch shows black and the screen's name until its picture arrives. Keys typed meanwhile go
+nowhere, so nothing lands on a screen you haven't seen yet. A screen that doesn't answer stays
+black with a note, and the app tries it again every 3 seconds. It never switches to another
+screen on its own.
+
+### Full and Sharp
+
+A screen can also have a **Sharp URL**: a second voxl of the same display at a smaller size (for
+example with voxl's `--capture-scale 0.8`). When every screen of a machine has one, the panel
+offers **Full | Sharp**. It's one choice for every window. On Windows, Sharp always decodes on
+the graphics card, even when the machine decodes Full on the CPU.
+
 ### Menus
 
-Mac: the **Machines** menu lists your machines, with **Add Machine…** and
-**Edit or Remove Machine…**. The **View** menu has Reload, voxl's stats overlay and full screen.
+Mac: the **Machines** menu lists your machines, with **Add Machine…** and **Settings…** for the
+machine in front: its name, screens and Sharp URLs, the tab's edge, and **Remove Machine…**. The
+**View** menu has Reload, voxl's stats overlay and full screen.
 
 Windows: click the icon at the top left of the window, or right-click the title bar. That menu
-lists your machines and has **Add machine...**, **Edit this machine...**,
-**Remove this machine...**, **Add this machine to the Start menu**, Full screen, Reload and
-voxl's stats overlay.
+lists your machines and has **Add machine...**, **Settings...** (the name, the two options above,
+the screens and the tab's edge), **Remove this machine...**, **Add this machine to the Start
+menu**, Full screen, Reload and voxl's stats overlay.
 
 ### A launcher per machine
 
@@ -108,6 +148,9 @@ open -n -a "voxl viewer" --args https://my-mac.example.ts.net:6901/ "My Mac"
 VoxlViewer.exe https://my-pc.example.ts.net:6901/ "My PC"
 ```
 
+A launcher or a URL opens the saved machine that has a screen at that URL, at its screen 1. A URL
+that no machine has opens as a machine of its own.
+
 ## Keys
 
 voxl maps keys between Mac and PC on its own. For example, Cmd on a Mac is Ctrl on a Windows
@@ -119,6 +162,7 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | --- | --- |
 | Cmd+Q | Quits the app |
 | Ctrl+Cmd+F | Full screen on or off |
+| Control+Option+1 to 9 | Screen 1 to 9 (3 to 9 when the machine has them) |
 | Cmd+V | Pastes your Mac's clipboard on the remote |
 | Other Cmd shortcuts (Cmd+W, Cmd+T, Cmd+R, ...) | Go to the remote |
 | Cmd+Tab, Cmd+Space | Stay with macOS, as in any app |
@@ -129,9 +173,18 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | --- | --- |
 | Ctrl+W, Ctrl+T, Ctrl+R, F5 and other browser shortcuts | Go to the remote |
 | F11 | Full screen on or off |
+| Win+Alt+1 to 9 | Screen 1 to 9 (3 to 9 when the machine has them) |
 | Win, alone or with other keys | With **This is a Mac**: go to the Mac as Control. Otherwise Windows keeps them. |
 | Alt on its own | Goes to the remote (Option on a Mac) instead of opening the window menu |
 | Win+L, Ctrl+Alt+Del | Always stay with Windows |
+
+### Keys typed by other programs
+
+Two viewers can show each other: a Mac's window on a PC, and that PC's window on the Mac. A key
+typed into one would then go round and round. So while a viewer window is in front, the Windows
+app ignores keys that other programs type, and the Mac app ignores keys that voxl types on that
+Mac. On Windows that also stops the on-screen keyboard, password-manager auto-type and key
+remappers from reaching the remote; type with the keyboard instead.
 
 ## voxl passwords
 
@@ -151,6 +204,18 @@ A `?token=` link also works, such as `https://my-mac.example.ts.net:6901/?token=
 is then part of the URL, so it is saved wherever the URL is: the app's settings, any launcher
 you make, and the web view's cache. Removing the machine doesn't erase all of those, so change
 voxl's password if a token link gets out.
+
+## Settings files
+
+For scripts that set up machines:
+
+- **Windows**: `%LOCALAPPDATA%\voxl-viewer\settings.json`. The comment at the top of
+  [windows/Settings.cs](windows/Settings.cs) shows its shape.
+- **Mac**: the defaults domain `io.github.danyeoakl.voxl-viewer`, key `machineList`. The comment
+  near the top of [mac/VoxlViewer.swift](mac/VoxlViewer.swift) shows its shape and a
+  `defaults write` example.
+
+Settings from earlier versions, with one URL per machine, load as machines with one screen.
 
 ## Privacy
 

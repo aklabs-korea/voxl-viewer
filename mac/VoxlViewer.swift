@@ -192,7 +192,8 @@ func fetchTitle(_ url: URL, _ done: @escaping (String) -> Void) {
             title = title.replacingOccurrences(of: code, with: char)
         }
         title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !title.isEmpty { DispatchQueue.main.async { done(title) } }
+        // voxl's default title is every screen's: host:port tells them apart.
+        if !title.isEmpty, title != "Voxl Computer Stream" { DispatchQueue.main.async { done(title) } }
     }.resume()
 }
 
@@ -854,7 +855,8 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         if !failing { setChip(label) }
         updateTitle()
         waitThenCheck()
-        web.load(URLRequest(url: url))
+        // A screen that's away fails within 10 s, and retry() tries it again 3 s later.
+        web.load(URLRequest(url: url, timeoutInterval: 10))
     }
 
     /// In 3 s: waited().
@@ -866,15 +868,13 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     /// 3 s after a try (or a late answer): the chip goes if the screen answered. If it hasn't, the
-    /// chip says so and the next try starts now, so one starts every 3 s while the screen is away.
-    /// After an error, retry() has the next try coming already.
+    /// chip says so while the try goes on, so a slow screen still connects.
     func waited() {
         connecting = false
         if answered {
             if !failing { setChip(nil) }
-        } else if retryLater == nil {
+        } else {
             notAnswering()
-            load()
         }
     }
 

@@ -236,6 +236,7 @@ sealed class ViewerForm : Form
         ShowView();
         shownUrl = ScreenUrl;
         answered = false;
+        pendingLogin = null; // a password typed for the page being left is saved only if that page loads
         starting = true;
         core.Navigate(WithStats(shownUrl, stats));
     }
