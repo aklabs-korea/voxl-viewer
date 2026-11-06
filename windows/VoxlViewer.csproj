@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Built as a self-contained single file (README, "Building from source"). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Without this, Windows stretches the picture on a 150% monitor. -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- voxl's own favicon (MIT, Tembo). -->
+    <ApplicationIcon>..\icon\voxl.ico</ApplicationIcon>
+    <AssemblyName>VoxlViewer</AssemblyName>
+    <RootNamespace>VoxlViewer</RootNamespace>
+    <AssemblyTitle>voxl viewer</AssemblyTitle>
+    <Product>voxl viewer</Product>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- A single-file publish carries the WebView2 loader DLL inside the exe too, and nothing
+         else lands next to it. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>embedded</DebugType>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned. Windows keeps the WebView2 runtime itself up to date. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+  </ItemGroup>
+
+  <!-- The package always references its WPF control too, which pulls in a second WindowsBase. -->
+  <Target Name="DropWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
+</Project>

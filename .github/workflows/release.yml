@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      signed: ${{ steps.signing.outputs.sign }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Sign and notarize only when all five secrets are set.
+      - name: Check for signing secrets
+        id: signing
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          if [ -n "$MACOS_CERT_P12" ] && [ -n "$MACOS_CERT_PASSWORD" ] && [ -n "$NOTARY_KEY_ID" ] \
+            && [ -n "$NOTARY_ISSUER_ID" ] && [ -n "$NOTARY_KEY_P8" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets are not set: the Mac app gets an ad-hoc signature and no notarization."
+          fi
+
+      - name: Import the certificate into a temporary keychain
+        if: steps.signing.outputs.sign == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          cert="$RUNNER_TEMP/cert.p12"
+          pass=$(uuidgen)
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode -o "$cert"
+          security create-keychain -p "$pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$pass" "$keychain"
+          security import "$cert" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$keychain" > /dev/null
+          # Add it to the search list so codesign finds the identity.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$cert"
+
+      - name: Build
+        env:
+          SIGN: ${{ steps.signing.outputs.sign }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          export VERSION="${TAG#v}"
+          if [ "$SIGN" = true ]; then
+            identity=$(security find-identity -v -p codesigning "$RUNNER_TEMP/signing.keychain-db" \
+              | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p')
+            identity=${identity%%$'\n'*}
+            if [ -z "$identity" ]; then
+              echo "::error::No Developer ID Application identity in MACOS_CERT_P12."
+              exit 1
+            fi
+            mac/build.sh --universal --sign "$identity"
+          else
+            mac/build.sh --universal
+          fi
+
+      - name: Notarize and staple
+        if: steps.signing.outputs.sign == 'true'
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s\n' "$NOTARY_KEY_P8" > "$key"
+          ditto -c -k --keepParent "build/voxl viewer.app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait
+          rm -f "$key"
+          # Stapling fails if Apple did not accept the app.
+          xcrun stapler staple "build/voxl viewer.app"
+          spctl --assess --type execute --verbose "build/voxl viewer.app"
+
+      - name: Zip
+        run: ditto -c -k --keepParent "build/voxl viewer.app" voxl-viewer-mac.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac
+          path: voxl-viewer-mac.zip
+          if-no-files-found: error
+
+      - name: Remove the temporary keychain
+        if: always() && steps.signing.outputs.sign == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary.p8"
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet publish windows/VoxlViewer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o out/win-x64
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          Remove-Item out/win-x64/*.pdb -ErrorAction SilentlyContinue
+          Compress-Archive -Path out/win-x64/* -DestinationPath voxl-viewer-windows-x64.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: voxl-viewer-windows-x64.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SIGNED: ${{ needs.mac.outputs.signed }}
+        run: |
+          if [ "$SIGNED" = true ]; then
+            mac="The Mac app is signed with a Developer ID and notarized by Apple."
+          else
+            mac="The Mac app is not notarized (it has an ad-hoc signature). macOS blocks it the first time: open System Settings > Privacy & Security and click Open Anyway."
+          fi
+          win="The Windows app is not code-signed, so SmartScreen may warn the first time: click More info, then Run anyway. It needs the WebView2 Runtime, which Windows 11 includes."
+          gh release create "$TAG" dist/voxl-viewer-mac.zip dist/voxl-viewer-windows-x64.zip \
+            --verify-tag --title "$TAG" --generate-notes --notes "$mac"$'\n\n'"$win"
