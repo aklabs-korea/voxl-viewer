@@ -26,7 +26,7 @@ sealed class ViewerForm : Form
     WinKeys? winKeys;
     bool stats, fullScreen, f11Down, retrying, forget;
     long f11Time;
-    int loads; // successful page loads, so a retry scheduled before one is dropped
+    int retryId; // bumped by each success and each scheduled retry: only the latest retry runs
     FormWindowState savedState;
     Rectangle savedBounds;
     int menuBase = -1;
@@ -122,7 +122,8 @@ sealed class ViewerForm : Form
     {
         if (e.IsSuccess && e.HttpStatusCode < 500)
         {
-            loads++;
+            retryId++; // a retry still waiting is dropped; a later failure schedules its own
+            retrying = false;
             Text = machine.Name;
             answered = false;
             if (pendingLogin is { } login)
@@ -146,11 +147,12 @@ sealed class ViewerForm : Form
         if (retrying) return;
         retrying = true;
         Text = machine.Name + " (waiting for voxl)";
-        var seen = loads;
+        var id = ++retryId;
         await Task.Delay(5000);
-        retrying = false;
         // A reload in the meantime may have worked: don't cut that session off.
-        if (loads == seen && !IsDisposed && Core is { } core) core.Navigate(PageUrl());
+        if (id != retryId) return;
+        retrying = false;
+        if (!IsDisposed && Core is { } core) core.Navigate(PageUrl());
     }
 
     // voxl may ask for its password (HTTP Basic). A saved one is tried first; the dialog runs after
