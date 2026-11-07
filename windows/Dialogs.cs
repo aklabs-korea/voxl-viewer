@@ -1,4 +1,5 @@
-// The two small dialogs: a machine (add, edit) and a voxl password.
+// The two small dialogs: a new machine and a voxl password. A machine's own settings, its screens
+// among them, are in SettingsForm.cs.
 namespace VoxlViewer;
 
 class SmallDialog : Form
@@ -61,30 +62,26 @@ class SmallDialog : Form
         MessageBox.Show(this, message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
 }
 
-sealed class MachineDialog : SmallDialog
+// A new machine with its first screen. Its other screens are added in its Settings.
+sealed class AddMachineDialog : SmallDialog
 {
     readonly TextBox name = new() { Width = 340 };
     readonly TextBox url = new() { Width = 340, PlaceholderText = "https://my-mac.example.ts.net:6901/" };
     readonly CheckBox isMac = new() { Text = "This is a Mac (the Win key works as the Mac's Control key)", AutoSize = true };
     readonly CheckBox cpu = new() { Text = "Decode video on the CPU (for a GPU that can't decode the remote's screen size)", AutoSize = true };
-    readonly string? originalUrl;
     Machine? result;
 
     public Machine Result => result!;
 
-    public MachineDialog(string title, Machine? machine) : base(title)
+    public AddMachineDialog() : base("Add machine")
     {
-        originalUrl = machine?.Url;
-        name.Text = machine?.Name ?? "";
-        url.Text = machine?.Url ?? "";
-        isMac.Checked = machine?.IsMac ?? false;
-        cpu.Checked = machine?.CpuDecode ?? false;
         Row("Name", name);
         Row("voxl URL", url);
         Row(null, isMac);
         Row(null, cpu);
+        Row(null, new Label { Text = "More screens of the same machine can be added in its Settings.", AutoSize = true });
         Buttons(Accept);
-        ActiveControl = machine is null ? name : url;
+        ActiveControl = name;
     }
 
     bool Accept()
@@ -94,22 +91,21 @@ sealed class MachineDialog : SmallDialog
             Complain("Enter the address of the machine's voxl page, like https://my-mac.example.ts.net:6901/");
             return false;
         }
-        if (address != originalUrl && Settings.Load().Find(address) is { } other)
+        var saved = Settings.Load();
+        if (saved.FindByUrl(address) is { } other)
         {
-            Complain($"That address is already saved as \"{other.Name}\".");
+            Complain($"That address is already a screen of \"{other.Name}\".");
             return false;
         }
         // Quotes would break the Start-menu shortcut's arguments.
         var label = name.Text.Trim().Replace('"', '\'');
         if (label.Length == 0) label = new Uri(address).Host;
-        // Each machine's Start-menu entry is named after it, so names must differ.
-        if (Settings.Load().Machines.Find(m => m.Url != originalUrl && string.Equals(StartMenu.FileName(m.Name),
-                StartMenu.FileName(label), StringComparison.OrdinalIgnoreCase)) is { } same)
+        if (Program.TakenName(label) is { } same)
         {
-            Complain($"\"{same.Name}\" is already the name of another machine. Pick another name.");
+            Complain($"\"{same}\" is already the name of another machine. Pick another name.");
             return false;
         }
-        result = new Machine(label, address, isMac.Checked, cpu.Checked);
+        result = Machine.One(label, address, isMac.Checked, cpu.Checked);
         return true;
     }
 }

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Makes a launcher for one machine: ~/Applications/voxl viewer/NAME.app, a copy of voxl viewer
-# that opens URL, with its own name, Dock icon and window memory.
+# that opens the saved machine with a screen at URL (or URL alone, if none has it), with its own
+# name, Dock icon and window memory.
 #
 #   mac/make-shortcut.sh NAME URL
 #   mac/make-shortcut.sh "My Mac" https://my-mac.example.ts.net:6901/
