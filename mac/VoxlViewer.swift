@@ -56,9 +56,11 @@ struct Machine: Equatable {
     /// Whether a launch URL opens this machine: one of its screens, with or without a ?token=, or the
     /// first screen it was saved with (its id). A machine made from that URL alone would take the
     /// same id, and its first edit would overwrite this one.
-    func owns(_ url: URL) -> Bool {
+    func owns(_ url: URL) -> Bool { has(url) || id == withoutToken(url) }
+    /// Whether url is one of its screens now, Full or Sharp, with or without a ?token=.
+    func has(_ url: URL) -> Bool {
         let bare = withoutToken(url)
-        return id == bare || screens.contains { withoutToken($0.url) == bare || $0.sharp.map(withoutToken) == bare }
+        return screens.contains { withoutToken($0.url) == bare || $0.sharp.map(withoutToken) == bare }
     }
     var isSaved: Bool { Machine.saved.contains { $0.id == id } }
 
@@ -856,8 +858,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         if !failing { setChip(label) }
         updateTitle()
         waitThenCheck()
-        // A screen that's away fails within 10 s, and retry() tries it again 3 s later.
-        web.load(URLRequest(url: url, timeoutInterval: 10))
+        web.load(URLRequest(url: url))
     }
 
     /// In 3 s: waited().
@@ -869,14 +870,23 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     /// 3 s after a try (or a late answer): the chip goes if the screen answered. If it hasn't, the
-    /// chip says so while the try goes on, so a slow screen still connects.
+    /// chip says so while the try goes on, so a slow screen still connects; one with still no answer
+    /// 10 s into the try gets a new one. A password prompt is an answer, so it's never cut off. A try
+    /// that fails is tried again 3 s later (retry()).
     func waited() {
         connecting = false
         if answered {
             if !failing { setChip(nil) }
-        } else {
-            notAnswering()
+            return
         }
+        notAnswering()
+        guard retryLater == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.answered else { return }
+            self.load()
+        }
+        retryLater = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7, execute: work)
     }
 
     func notAnswering() {
@@ -1594,7 +1604,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             url = (Bundle.main.infoDictionary?["VoxlURL"] as? String).flatMap(voxlURL)
         }
         guard let url else { return nil }
-        return Machine.saved.first { $0.owns(url) } ?? Machine(url: url, name: name)
+        // The machine with that screen now, before one whose first screen it once was.
+        let saved = Machine.saved
+        return saved.first { $0.has(url) } ?? saved.first { $0.owns(url) } ?? Machine(url: url, name: name)
     }
 
     func lastMachine() -> Machine? {
