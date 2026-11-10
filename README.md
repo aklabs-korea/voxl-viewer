@@ -19,8 +19,15 @@ This is an unofficial, independent project. It is not made or supported by Tembo
 - **A machine's screens in one window.** Each display of a machine is its own voxl page. Its
   window shows one at a time and switches with a key or a tab at its edge, without moving,
   resizing or rescaling anything.
+- **Sound follows you.** It plays only while the window is in front and you used this machine's
+  own keyboard or mouse in the last 5 minutes.
 - **Clipboard both ways**, uploads and downloads through voxl's Files panel, full screen, and
   automatic retry while the remote is offline or voxl restarts.
+
+With a voxl host that excludes the viewer's sound from capture, two machines can view each other
+without sending that sound round in a loop. Use the viewer on both. A browser tab on a machine
+that is also being viewed is a bad idea: the host doesn't exclude its sound, and the tab has no
+gate for the window in front or recent local input.
 
 ## Install
 
@@ -111,6 +118,19 @@ A screen can also have a **Sharp URL**: a second voxl of the same display at a s
 example with voxl's `--capture-scale 0.8`). When every screen of a machine has one, the panel
 offers **Full | Sharp**. It's one choice for every window. On Windows, Sharp always decodes on
 the graphics card, even when the machine decodes Full on the CPU.
+
+### Sound
+
+Sound plays only once the page has loaded, while its window is in front and you have used this
+machine's own keyboard or mouse in the last 5 minutes. Input sent by a voxl host doesn't keep
+sound on. Bringing the window forward remotely isn't enough after those 5 minutes: use the
+local keyboard or mouse. Minimizing the window mutes it; on the Mac, leaving the app, locking
+the screen or putting the display to sleep also mutes it. On Windows, this window's Settings
+and its dialogs still count as in front.
+
+A new WebView2 browser process on Windows, or a newly launched Mac app, stays muted for its first
+2 seconds so a local voxl host has time to exclude its sound from capture. On Windows, all
+windows share one browser process; CPU decode and Full | Sharp changes navigate the same view.
 
 ### Menus
 

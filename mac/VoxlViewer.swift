@@ -207,7 +207,8 @@ func typedByVoxl(_ e: NSEvent) -> Bool {
           pid != Int64(getpid()) else { return false }
     var path = [CChar](repeating: 0, count: 4096)
     guard proc_pidpath(Int32(pid), &path, UInt32(path.count)) > 0 else { return false }
-    return URL(fileURLWithPath: String(cString: path)).lastPathComponent == "voxl"
+    let name = URL(fileURLWithPath: String(cString: path)).lastPathComponent
+    return name == "voxl" || name == "voxl-1"
 }
 
 /// Whether a frame comes from the machine's own voxl: same scheme, host (in any case) and port.
@@ -286,6 +287,22 @@ let pictureWatch = """
 /// the page first, and voxl's page claims all of them for the remote machine (Cmd+V included,
 /// once the Edit menu's Paste has delivered the Mac's clipboard to it).
 final class ViewerWebView: WKWebView {
+    private var pageMuted: Bool?
+
+    /// Mute the whole page, including its AudioWorklet. Older WebKit can suspend playback instead.
+    func mutePage(_ muted: Bool) {
+        guard pageMuted != muted else { return }
+        pageMuted = muted
+        let selector = NSSelectorFromString("_setPageMuted:")
+        if responds(to: selector) {
+            typealias SetPageMuted = @convention(c) (AnyObject, Selector, UInt) -> Void
+            let call = unsafeBitCast(method(for: selector), to: SetPageMuted.self)
+            call(self, selector, muted ? 1 : 0)
+        } else {
+            setAllMediaPlaybackSuspended(muted, completionHandler: nil)
+        }
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
@@ -828,12 +845,14 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     func newWebView() {
         if let old = web {
+            old.mutePage(true)
             old.navigationDelegate = nil
             old.uiDelegate = nil
             old.stopLoading()
             old.removeFromSuperview()
         }
         web = ViewerWebView(frame: content.bounds, configuration: config)
+        web.mutePage(true)
         web.autoresizingMask = [.width, .height]
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -842,6 +861,13 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         web.underPageBackgroundColor = .black
         content.addSubview(web, positioned: .below, relativeTo: nil)
         window.makeFirstResponder(web)
+    }
+
+    /// Sound follows the window in front, after real input here and the host's launch grace.
+    func updateAudio() {
+        let audible = committed && window.isKeyWindow && NSApp.isActive && !window.isMiniaturized
+            && viewer.canPlayAudio
+        web.mutePage(!audible)
     }
 
     /// Connects to the screen on view. A web view that has shown a page is swapped for a new one:
@@ -1028,8 +1054,10 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { failed(e) }
 
     func webView(_ w: WKWebView, didCommit n: WKNavigation!) {
+        guard w === web else { return }
         answered = true
         committed = true
+        updateAudio()
         window.subtitle = ""
         if failing {
             failing = false
@@ -1176,6 +1204,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     func windowDidResignKey(_ note: Notification) {
+        updateAudio()
         resignedKey = Date()
         ownChange = NSPasteboard.general.changeCount
         // The digit's release may go to another window now.
@@ -1185,11 +1214,14 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     func windowDidBecomeKey(_ note: Notification) {
         reread()
+        updateAudio()
         if let held = heldClip, NSPasteboard.general.changeCount == ownChange { writeClipboard(held) }
         heldClip = nil
     }
 
     func windowDidResize(_ note: Notification) { switcher.hide() }
+    func windowDidMiniaturize(_ note: Notification) { updateAudio() }
+    func windowDidDeminiaturize(_ note: Notification) { updateAudio() }
 
     func writeClipboard(_ body: Any) {
         let board = NSPasteboard.general
@@ -1205,6 +1237,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     func windowWillClose(_ note: Notification) {
         // Let the web view go, so the stream stops with the window.
+        web.mutePage(true)
         retryLater?.cancel()
         waitLater?.cancel()
         flashLater?.cancel()
@@ -1542,6 +1575,57 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate {
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var windows: [MachineWindow] = []
     var selfTestFailed = false
+    let launched = Date()
+    var lastInput = Date.distantPast
+    var screenLocked = false, screensAsleep = false
+    var audioTimer: Timer?
+
+    /// Date includes time spent asleep, so waking after five minutes needs real input again.
+    var canPlayAudio: Bool {
+        let now = Date()
+        return !screenLocked && !screensAsleep && now.timeIntervalSince(launched) >= 2
+            && now.timeIntervalSince(lastInput) < 5 * 60
+    }
+
+    func updateAudio() { windows.forEach { $0.updateAudio() } }
+
+    /// Input a voxl host posted (someone controlling this Mac from elsewhere) isn't someone here.
+    func physicalInput(_ e: NSEvent) {
+        guard !typedByVoxl(e) else { return }
+        let back = Date().timeIntervalSince(lastInput) >= 5 * 60
+        lastInput = Date()
+        // Mouse moves come many times a second; the 250 ms timer covers the rest.
+        if back { updateAudio() }
+    }
+
+    func watchAudio() {
+        let distributed = DistributedNotificationCenter.default()
+        for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
+            distributed.addObserver(self, selector: #selector(screenStateChanged(_:)),
+                                    name: Notification.Name(name), object: nil, suspensionBehavior: .deliverImmediately)
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification] {
+            workspace.addObserver(self, selector: #selector(screenStateChanged(_:)), name: name, object: nil)
+        }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.updateAudio() }
+        RunLoop.main.add(timer, forMode: .common)
+        audioTimer = timer
+    }
+
+    @objc func screenStateChanged(_ note: Notification) {
+        switch note.name {
+        case Notification.Name("com.apple.screenIsLocked"): screenLocked = true
+        case Notification.Name("com.apple.screenIsUnlocked"): screenLocked = false
+        case NSWorkspace.screensDidSleepNotification: screensAsleep = true
+        case NSWorkspace.screensDidWakeNotification: screensAsleep = false
+        default: return
+        }
+        updateAudio()
+    }
+
+    func applicationDidBecomeActive(_ note: Notification) { updateAudio() }
+    func applicationDidResignActive(_ note: Notification) { updateAudio() }
 
     /// The machine in front (its window, or its Settings).
     var current: MachineWindow? {
@@ -1551,6 +1635,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
         watchInput()
+        watchAudio()
         // Other copies of the app (each launcher is one) and seeds change these too.
         for key in ["machineList", "sharp"] { defaults.addObserver(self, forKeyPath: key, options: [], context: nil) }
         if let m = launchMachine() ?? lastMachine() {
@@ -1569,6 +1654,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// A field half typed in Settings is saved on Cmd+Q too.
     func applicationWillTerminate(_ note: Notification) {
+        audioTimer?.invalidate()
+        DistributedNotificationCenter.default().removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         windows.forEach { $0.settings?.window.makeFirstResponder(nil) }
     }
 
@@ -1581,14 +1669,22 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Keys and mouse go through the window in front first: its shortcuts, and its edge tab.
     func watchInput() {
         NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] e in
+            self?.physicalInput(e)
             guard let w = self?.windows.first(where: { $0.window.isKeyWindow }) else { return e }
             return w.key(e)
         }
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
                                                     .leftMouseUp, .rightMouseUp, .otherMouseUp, .leftMouseDragged,
-                                                    .rightMouseDragged, .otherMouseDragged]) { [weak self] e in
+                                                    .rightMouseDragged, .otherMouseDragged, .scrollWheel]) { [weak self] e in
+            self?.physicalInput(e)
             self?.windows.first(where: { $0.window.isKeyWindow })?.switcher.mouse(e)
             return e
+        }
+        // The mouse in other apps counts too: someone using this Mac a minute ago in another app
+        // is here when they bring a viewer forward. (Watching other apps' keys needs a privacy grant.)
+        NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                                                     .leftMouseDragged, .scrollWheel]) { [weak self] e in
+            self?.physicalInput(e)
         }
     }
 

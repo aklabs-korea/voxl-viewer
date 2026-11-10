@@ -28,6 +28,7 @@ static class Program
         // A second launch has the right to come to the front (it was just clicked); pass it on to
         // the first process, which shows the window.
         AllowSetForegroundWindow(-1); // ASFW_ANY
+        using var input = new PhysicalInput();
         try
         {
             new App(singleInstance: true).Run(args);
@@ -118,5 +119,67 @@ static class Program
         window.FormClosed += (_, _) => windows.Remove(window);
         window.Show();
         return window;
+    }
+}
+
+// One tracker for the whole process, even while another app is in front. SendInput from a voxl
+// host has no device, so it never keeps sound on. TickCount64 includes time spent asleep.
+sealed class PhysicalInput : NativeWindow, IDisposable
+{
+    [StructLayout(LayoutKind.Sequential)]
+    struct RAWINPUTDEVICE { public ushort page, usage; public uint flags; public IntPtr target; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RAWINPUTHEADER { public uint type, size; public IntPtr device, wParam; }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] devices, uint count, uint size);
+    [DllImport("user32.dll")]
+    static extern uint GetRawInputData(IntPtr input, uint command, out RAWINPUTHEADER header, ref uint size, uint headerSize);
+
+    static long? last;
+    public static bool Recent => last is { } time && Environment.TickCount64 - time < 5 * 60 * 1000;
+
+    public PhysicalInput()
+    {
+        CreateHandle(new CreateParams { Parent = new IntPtr(-3) }); // HWND_MESSAGE
+        var devices = Devices(0x100, Handle); // RIDEV_INPUTSINK
+        if (!RegisterRawInputDevices(devices, (uint)devices.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>()))
+        {
+            var error = Marshal.GetLastWin32Error();
+            DestroyHandle();
+            throw new System.ComponentModel.Win32Exception(error);
+        }
+    }
+
+    static RAWINPUTDEVICE[] Devices(uint flags, IntPtr target) => new[]
+    {
+        new RAWINPUTDEVICE { page = 1, usage = 6, flags = flags, target = target }, // keyboard
+        new RAWINPUTDEVICE { page = 1, usage = 2, flags = flags, target = target }, // mouse
+    };
+
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_INPUT = 0xFF;
+        const uint RID_HEADER = 0x10000005;
+        if (m.Msg == WM_INPUT)
+        {
+            var size = (uint)Marshal.SizeOf<RAWINPUTHEADER>();
+            if (GetRawInputData(m.LParam, RID_HEADER, out var header, ref size, size) == size && header.device != IntPtr.Zero)
+            {
+                var was = Recent;
+                last = Environment.TickCount64;
+                // A mouse can send 1000 of these a second; the 250 ms timer covers the rest.
+                if (!was) foreach (var window in Program.Windows) window.UpdateAudio();
+            }
+        }
+        base.WndProc(ref m); // Windows cleans up foreground raw input here.
+    }
+
+    public void Dispose()
+    {
+        var devices = Devices(1, IntPtr.Zero); // RIDEV_REMOVE
+        RegisterRawInputDevices(devices, (uint)devices.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+        DestroyHandle();
     }
 }

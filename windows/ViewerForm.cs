@@ -8,6 +8,7 @@
 //   has the machines, Settings, Reload and voxl's stats overlay;
 // - voxl's password can be kept in Windows Credential Manager;
 // - a screen that doesn't answer is tried again every 3 s, and never swapped for another by itself.
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -47,15 +48,16 @@ sealed class ViewerForm : Form
         }
         """;
 
-    // Each decode choice is its own WebView2 browser process, with its own data folder.
-    static readonly Dictionary<bool, Task<CoreWebView2Environment>> environments = new();
+    // Every window shares one browser process, which the host leaves out of its audio capture.
+    static Task<CoreWebView2Environment>? environment;
     static Icon? appIcon;
 
     Machine machine;
     int row;                    // the screen on show
-    WebView2 web;
+    readonly WebView2 web;
     bool started;               // this view's WebView2 is up
-    bool viewCpu;               // whether this view decodes on the CPU: fixed when it started
+    DateTime browserStarted;    // a new browser stays muted while the host notices it
+    readonly System.Windows.Forms.Timer audioTimer = new() { Interval = 250 };
     string? shownUrl;           // the screen page the view was last sent to, without ?stats
     bool loading;               // that page hasn't loaded yet: the view is hidden
     bool down;                  // that page didn't answer: the view is hidden while it's tried again
@@ -88,6 +90,7 @@ sealed class ViewerForm : Form
         UpdateTitle();
         PlaceWindow();
         Controls.Add(web);
+        audioTimer.Tick += (_, _) => UpdateAudio();
     }
 
     public Machine Machine => machine;
@@ -102,8 +105,21 @@ sealed class ViewerForm : Form
     public Rectangle PictureArea => RectangleToScreen(ClientRectangle);
 
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
 
     public bool InFront => IsHandleCreated && WindowState != FormWindowState.Minimized && GetForegroundWindow() == Handle;
+
+    // Settings and dialogs owned by this window count for sound, but never take its remote keys.
+    bool AudioInFront => IsHandleCreated && WindowState != FormWindowState.Minimized
+        && GetAncestor(GetForegroundWindow(), 3) == Handle; // GA_ROOTOWNER
+
+    public void UpdateAudio()
+    {
+        if (!started || IsDisposed || Core is not { } core) return;
+        var audible = !loading && !down && AudioInFront && PhysicalInput.Recent
+            && DateTime.UtcNow - browserStarted >= TimeSpan.FromSeconds(2);
+        if (core.IsMuted != !audible) core.IsMuted = !audible;
+    }
 
     // Pixels on this window's monitor for a size at 100%.
     public int Px(int size) => (int)Math.Round(size * DeviceDpi / 96.0);
@@ -116,7 +132,7 @@ sealed class ViewerForm : Form
     bool UsesSharp => Prefs.Sharp && machine.HasSharp;
     // Sharp always decodes on the GPU; Full on the CPU when the machine asks for it.
     bool Cpu => machine.CpuDecode && !UsesSharp;
-    string ScreenUrl => UsesSharp ? ShownScreen.Sharp! : ShownScreen.Url;
+    string ScreenUrl => WithDecode(UsesSharp ? ShownScreen.Sharp! : ShownScreen.Url, Cpu);
 
     WebView2 NewView()
     {
@@ -132,19 +148,28 @@ sealed class ViewerForm : Form
         winKeys = new WinKeys(this, Handle) { Mac = machine.IsMac, Rows = machine.Screens.Count };
         var name = machine.Name;
         Settings.Change(s => s.Last = name);
+        audioTimer.Start();
         StartView();
     }
 
     // Starts this window's WebView2 and connects the screen on show.
     async void StartView()
     {
-        var view = web;
-        viewCpu = Cpu;
         try
         {
-            await view.EnsureCoreWebView2Async(await WebEnvironment(viewCpu));
-            if (IsDisposed || view != web) return;
-            var core = view.CoreWebView2;
+            await web.EnsureCoreWebView2Async(await WebEnvironment());
+            if (IsDisposed) return;
+            var core = web.CoreWebView2;
+            core.IsMuted = true;
+            try
+            {
+                using var process = Process.GetProcessById((int)core.BrowserProcessId);
+                browserStarted = process.StartTime.ToUniversalTime();
+            }
+            catch (Exception)
+            {
+                browserStarted = DateTime.UtcNow;
+            }
             var options = core.Settings;
             options.AreBrowserAcceleratorKeysEnabled = false;
             options.AreDefaultContextMenusEnabled = false;
@@ -165,7 +190,7 @@ sealed class ViewerForm : Form
         }
         catch (Exception ex)
         {
-            if (IsDisposed || view != web) return;
+            if (IsDisposed) return;
             var help = ex is WebView2RuntimeNotFoundException
                 ? "\n\nvoxl viewer needs the Microsoft Edge WebView2 Runtime: https://developer.microsoft.com/microsoft-edge/webview2/"
                 : "";
@@ -173,38 +198,24 @@ sealed class ViewerForm : Form
             Close();
             return;
         }
-        if (IsDisposed || view != web) return;
+        if (IsDisposed) return;
         started = true;
         Connect(row);
     }
 
-    // The decode choice belongs to WebView2's browser process, so each has its own data folder.
-    static Task<CoreWebView2Environment> WebEnvironment(bool cpuDecode)
-    {
-        if (!environments.TryGetValue(cpuDecode, out var task))
-        {
-            var options = new CoreWebView2EnvironmentOptions(cpuDecode ? "--disable-accelerated-video-decode" : null);
-            var folder = Path.Combine(Settings.Dir, cpuDecode ? "WebView2-cpu" : "WebView2");
-            environments[cpuDecode] = task = CoreWebView2Environment.CreateAsync(null, folder, options);
-        }
-        return task;
-    }
+    static Task<CoreWebView2Environment> WebEnvironment() =>
+        environment ??= CoreWebView2Environment.CreateAsync(null, Path.Combine(Settings.Dir, "WebView2"));
 
-    // Video decode is fixed when WebView2 starts, so a change to it (Full | Sharp, Decode on the
-    // CPU) starts a new view in this window: its place, full screen and screen stay.
-    void RestartView()
+    // CPU decode is a page option, so Full | Sharp and decode changes use the same browser.
+    // Other parameters, including ?token= and ?stats, stay.
+    internal static string WithDecode(string url, bool cpu)
     {
-        var old = web;
-        web = NewView();
-        Controls.Add(web);
-        Controls.Remove(old);
-        old.Dispose();
-        started = false;
-        starting = true; // the old view's loads say nothing now
-        shownUrl = null;
-        pendingLogin = null;
-        ShowView();
-        StartView();
+        var b = new UriBuilder(url);
+        var query = b.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Where(p => p != "decode" && !p.StartsWith("decode=")).ToList();
+        if (cpu) query.Add("decode=cpu");
+        b.Query = string.Join("&", query);
+        return b.Uri.AbsoluteUri;
     }
 
     // voxl's page with or without its ?stats overlay; other parameters such as ?token= stay.
@@ -238,6 +249,7 @@ sealed class ViewerForm : Form
         answered = false;
         pendingLogin = null; // a password typed for the page being left is saved only if that page loads
         starting = true;
+        // The same browser keeps its mute and its age; a switch doesn't start another grace.
         core.Navigate(WithStats(shownUrl, stats));
     }
 
@@ -274,13 +286,12 @@ sealed class ViewerForm : Form
         ApplyView();
     }
 
-    // After a change to the machine or to Full | Sharp: a new view if its decode changed, the
-    // screen again if its address did. Nothing else reconnects.
+    // After a change to the machine or to Full | Sharp: the screen again if its address or decode
+    // changed. Nothing else reconnects.
     void ApplyView()
     {
         UpdateTitle();
-        if (Cpu != viewCpu) RestartView();
-        else if (shownUrl is not null && ScreenUrl != shownUrl) Connect(row);
+        if (shownUrl is not null && ScreenUrl != shownUrl) Connect(row);
     }
 
     // "M3 · top · Sharp": the machine, the screen (left out when it's the only one and named the
@@ -370,6 +381,7 @@ sealed class ViewerForm : Form
         loading = false;
         down = !answering;
         ShowView();
+        UpdateAudio();
         if (changed) UpdateTitle();
         return back;
     }
@@ -685,6 +697,7 @@ sealed class ViewerForm : Form
     {
         base.OnResize(e);
         ShowView();
+        UpdateAudio();
         chip.Place();
         switcher.HideAll();
     }
@@ -699,6 +712,7 @@ sealed class ViewerForm : Form
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
+        UpdateAudio();
         web.Focus();
         switcher.Start();
     }
@@ -706,6 +720,7 @@ sealed class ViewerForm : Form
     protected override void OnDeactivate(EventArgs e)
     {
         base.OnDeactivate(e);
+        UpdateAudio();
         winKeys?.Reset();
         f11Down = false;
     }
@@ -718,6 +733,7 @@ sealed class ViewerForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        audioTimer.Dispose();
         winKeys?.Dispose();
         switcher.Dispose();
         base.OnFormClosed(e);
