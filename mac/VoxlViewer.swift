@@ -1592,8 +1592,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Input a voxl host posted (someone controlling this Mac from elsewhere) isn't someone here.
     func physicalInput(_ e: NSEvent) {
         guard !typedByVoxl(e) else { return }
+        let back = Date().timeIntervalSince(lastInput) >= 5 * 60
         lastInput = Date()
-        updateAudio()
+        // Mouse moves come many times a second; the 250 ms timer covers the rest.
+        if back { updateAudio() }
     }
 
     func watchAudio() {
@@ -1677,6 +1679,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.physicalInput(e)
             self?.windows.first(where: { $0.window.isKeyWindow })?.switcher.mouse(e)
             return e
+        }
+        // The mouse in other apps counts too: someone using this Mac a minute ago in another app
+        // is here when they bring a viewer forward. (Watching other apps' keys needs a privacy grant.)
+        NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                                                     .leftMouseDragged, .scrollWheel]) { [weak self] e in
+            self?.physicalInput(e)
         }
     }
 
