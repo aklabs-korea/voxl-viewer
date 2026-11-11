@@ -1,6 +1,7 @@
 // The keyboard while a viewer window is in front, through a low-level keyboard hook:
-// - Win+Alt+1..9 go to the window's screens: 1 and 2 always, 3..9 when the machine has that
-//   screen (otherwise the keys go on as usual).
+// - F1..F9 go to the window's screens, on a machine with more than one screen and for one it has
+//   (otherwise the key goes on to the remote: F2 renames in Explorer). On many keyboards the top
+//   row is media keys, so these are Fn+F1, Fn+F2 ... there.
 // - Keys other programs inject go nowhere. voxl on this PC types what someone viewing the PC
 //   types; in front of this window that would go on to the remote, which may be showing this PC,
 //   and a key could bounce PC -> remote -> PC forever.
@@ -55,12 +56,12 @@ sealed class WinKeys : IDisposable
     volatile uint hookThread;
     public volatile IntPtr FormHandle;
     public volatile bool Mac;                 // the machine is a Mac: Win is its Control key
-    public volatile int Rows;                 // the machine's screens, for Win+Alt+3..9
+    public volatile int Rows;                 // the machine's screens, for F1..F9
 
     readonly object sync = new();
     readonly HashSet<uint> held = new();      // keys down right now, as the hook saw them
     readonly HashSet<uint> swallowed = new(); // keys whose key-down Windows never saw: their key-up goes the same way
-    readonly HashSet<uint> switching = new(); // the digit of a Win+Alt+N: its key-up goes nowhere either
+    readonly HashSet<uint> switching = new(); // the F-key of a switch: its key-up goes nowhere either
     readonly HashSet<uint> bounced = new();   // injected keys dropped: their key-ups too
     readonly HashSet<uint> injected = new();  // injected keys let through: their repeats and key-ups too
     readonly ConcurrentQueue<Key> queue = new();
@@ -155,14 +156,16 @@ sealed class WinKeys : IDisposable
         return false;
     }
 
-    // Win+Alt and a digit 1..9, nothing else held: the screen's row (0-based), when it's the viewer's.
+    // F1..F9 with nothing else held: the screen's row (0-based), when the machine has more than one
+    // screen and that one.
     int? SwitchRow(uint vk)
     {
-        if (vk is < 0x31 or > 0x39) return null;
-        if (!Held(VK_LWIN, VK_RWIN) || !Held(VK_LMENU, VK_RMENU) || Held(VK_LCONTROL, VK_RCONTROL) || Held(VK_LSHIFT, VK_RSHIFT))
+        const uint VK_F1 = 0x70, VK_F9 = 0x78;
+        if (vk is < VK_F1 or > VK_F9) return null;
+        if (Held(VK_LWIN, VK_RWIN) || Held(VK_LMENU, VK_RMENU) || Held(VK_LCONTROL, VK_RCONTROL) || Held(VK_LSHIFT, VK_RSHIFT))
             return null;
-        var row = (int)(vk - 0x31);
-        return row < 2 || row < Rows ? row : null;
+        var row = (int)(vk - VK_F1);
+        return Rows > 1 && row < Rows ? row : null;
     }
 
     // On the hook thread, under the lock, for keys another program injected. While the window is in

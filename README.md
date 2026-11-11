@@ -96,13 +96,16 @@ window and the keys go by number. Change the order with **Move up** and **Move d
 
 To switch screens:
 
-- **Keys**: Control+Option+1 to 9 on the Mac, Win+Alt+1 to 9 on Windows. 1 and 2 always switch
-  screens; 3 to 9 only on a machine with that many, otherwise they go to the remote.
-- **The tab**: rest the pointer for a moment in the middle of the window's top edge, and a tab
-  slides in with the screen's name. Click it for the panel: the machine's screens, Full | Sharp,
-  Full screen and Settings. Clicking the screen on show connects it again.
+- **Tabs**: in a window, a row of tabs along the top shows the machine's screens, the one on show
+  lit, with Full | Sharp at the right. Click a tab to switch. Full screen hides the row, so the
+  picture keeps the whole monitor.
+- **Keys**: F1 to F9 (on keyboards whose F keys are media keys, Fn+F1, Fn+F2 ...), on a machine
+  with more than one screen and for a screen it has; otherwise the key goes to the remote.
+- **The edge tab**, in full screen: rest the pointer for a moment in the middle of the window's top
+  edge, and a tab slides in with the screen's name. Click it for the panel: the machine's screens,
+  Full | Sharp, Full screen and Settings. Clicking the screen on show connects it again.
 
-The tab never takes the keyboard, so typing keeps going to the remote. It doesn't come while a
+The tab row and the edge tab never take the keyboard, so typing keeps going to the remote. It doesn't come while a
 mouse button is held, and after a click at the edge, or once it has been left alone, it waits
 until the pointer leaves the edge. Pick its edge (Top, Left, Bottom or Right) in Settings; it's
 one choice for every window.
@@ -182,7 +185,7 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | --- | --- |
 | Cmd+Q | Quits the app |
 | Ctrl+Cmd+F | Full screen on or off |
-| Control+Option+1 to 9 | Screen 1 to 9 (3 to 9 when the machine has them) |
+| F1 to F9 (Fn+F1 ... on Mac keyboards) | Screen 1 to 9, on a machine with more than one screen and for a screen it has |
 | Cmd+V | Pastes your Mac's clipboard on the remote |
 | Other Cmd shortcuts (Cmd+W, Cmd+T, Cmd+R, ...) | Go to the remote |
 | Cmd+Tab, Cmd+Space | Stay with macOS, as in any app |
@@ -193,7 +196,7 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | --- | --- |
 | Ctrl+W, Ctrl+T, Ctrl+R, F5 and other browser shortcuts | Go to the remote |
 | F11 | Full screen on or off. On keyboards whose F keys are media keys, Fn+F11. The tab's panel also has **Leave full screen**. |
-| Win+Alt+1 to 9 | Screen 1 to 9 (3 to 9 when the machine has them) |
+| F1 to F9 | Screen 1 to 9, on a machine with more than one screen and for a screen it has. On keyboards whose F keys are media keys, Fn+F1, Fn+F2 ... |
 | Win, alone or with other keys | With **This is a Mac**: go to the Mac as Control. Otherwise Windows keeps them. |
 | Alt on its own | Goes to the remote (Option on a Mac) instead of opening the window menu |
 | Win+L, Ctrl+Alt+Del | Always stay with Windows |

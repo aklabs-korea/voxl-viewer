@@ -6,7 +6,8 @@
 // the viewer's own Cmd+Q and Ctrl+Cmd+F. macOS still keeps Cmd+Tab and Cmd+Space, as for any app.
 //
 // A machine has one or more screens, each its own voxl URL, in the user's order. Its window shows
-// one at a time: Control+Option+1..9, or the tab at an edge of the picture, switch between them.
+// one at a time: F1..F9, the tab row under the title bar, or (in full screen) the tab at an edge
+// of the picture, switch between them.
 //
 // Which machine opens: a URL argument (open -a "voxl viewer" --args URL [NAME]), else VoxlURL in
 // Info.plist (set by mac/make-shortcut.sh), else the last machine used from the Machines menu. A
@@ -134,11 +135,11 @@ enum Edge: String, CaseIterable {
 /// Full or Sharp, for every machine: true loads each screen's Sharp URL.
 var sharpChosen: Bool { defaults.bool(forKey: "sharp") }
 
-/// The viewer's keys for a screen: Control+Option and its number.
-func shortcut(_ row: Int) -> String { "⌃⌥\(row + 1)" }
+/// The viewer's key for a screen: F and its number (Fn+F1 ... where the F keys are media keys).
+func shortcut(_ row: Int) -> String { "F\(row + 1)" }
 
-/// The number row's key codes, for screens 1 to 9 whatever the keyboard layout.
-let digitKeys: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
+/// F1 to F9's key codes, for screens 1 to 9.
+let fKeys: [UInt16: Int] = [122: 0, 120: 1, 99: 2, 118: 3, 96: 4, 97: 5, 98: 6, 100: 7, 101: 8]
 
 /// An http or https URL with a host, or nil. An empty path becomes "/".
 func voxlURL(_ text: String) -> URL? {
@@ -553,6 +554,8 @@ final class Switcher: NSObject {
     /// Every mouse event of the window, before the page or the tab gets it. None stops here: a click
     /// away from the tab and panel puts them away and still goes to the remote.
     func mouse(_ e: NSEvent) {
+        // In a window with the tab row, the screens are a click away already.
+        guard !owner.tabsShown else { return hide() }
         let p = pointer
         if !atEdge(p) { spent = false }
         switch e.type {
@@ -742,6 +745,12 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     var web: ViewerWebView!
     let chip = Chip()
     lazy var switcher = Switcher(owner: self)
+    /// The tab row under the title bar: a tab per screen, the one on view selected, and Full | Sharp
+    /// when the machine has Sharp streams. Only on a machine with more than one screen; in full
+    /// screen it goes with the title bar (the edge tab is there).
+    let tabsBar = NSTitlebarAccessoryViewController()
+    let screenTabs = NSSegmentedControl()
+    let sharpTabs = NSSegmentedControl(labels: ["Full", "Sharp"], trackingMode: .selectOne, target: nil, action: nil)
     var settings: SettingsWindow?
     let onClose: (MachineWindow) -> Void
     var stats = false
@@ -756,7 +765,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     /// What the chip says while nothing flashes on it (nil: it's away).
     var chipText: String?
     var retryLater, waitLater, flashLater: DispatchWorkItem?
-    /// The digit of the last Control+Option shortcut, whose release stays here too.
+    /// The F key of the last switch, whose release stays here too.
     var eaten: UInt16?
     /// The remote's latest copy that arrived while the window was in the background.
     var heldClip: Any?
@@ -819,6 +828,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
                                                owner: content, userInfo: nil))
         newWebView()
         content.addSubview(chip)
+        makeTabs()
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenPrimary]
         window.delegate = self
@@ -932,7 +942,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         load()
     }
 
-    /// Control+Option+N: screen N, or its name again if it's the one on view.
+    /// F1..F9 or a tab: screen N, or its name again if it's the one on view.
     func go(to n: Int) {
         switcher.hide()
         guard n < machine.screens.count else { return flash("\(machine.name) has no screen \(n + 1)") }
@@ -988,6 +998,57 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         if machine.hasSharp { parts.append(sharp ? "Sharp" : "Full") }
         window.title = parts.joined(separator: " · ")
         settings?.retitle()
+        updateTabs()
+    }
+
+    func makeTabs() {
+        screenTabs.trackingMode = .selectOne
+        screenTabs.target = self
+        screenTabs.action = #selector(pickScreen(_:))
+        sharpTabs.target = self
+        sharpTabs.action = #selector(pickSharp(_:))
+        let bar = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 32))
+        for c in [screenTabs, sharpTabs] {
+            c.refusesFirstResponder = true // keys keep going to the remote
+            c.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(c)
+        }
+        NSLayoutConstraint.activate([
+            screenTabs.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
+            screenTabs.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            sharpTabs.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -10),
+            sharpTabs.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+        ])
+        tabsBar.view = bar
+        tabsBar.layoutAttribute = .bottom
+        window.addTitlebarAccessoryViewController(tabsBar)
+        updateTabs()
+    }
+
+    func updateTabs() {
+        tabsBar.isHidden = machine.screens.count < 2
+        guard !tabsBar.isHidden else { return }
+        screenTabs.segmentCount = machine.screens.count
+        for (i, s) in machine.screens.enumerated() {
+            screenTabs.setLabel("\(i + 1) · \(s.name)    \(shortcut(i))", forSegment: i)
+        }
+        screenTabs.selectedSegment = row
+        sharpTabs.isHidden = !machine.hasSharp
+        sharpTabs.selectedSegment = sharp ? 1 : 0
+    }
+
+    /// The tab row is up: the edge tab stays away (it is for full screen).
+    var tabsShown: Bool { !tabsBar.isHidden && !window.styleMask.contains(.fullScreen) }
+
+    @objc func pickScreen(_ sender: NSSegmentedControl) {
+        go(to: sender.selectedSegment)
+        updateTabs()
+        window.makeFirstResponder(web)
+    }
+
+    @objc func pickSharp(_ sender: NSSegmentedControl) {
+        viewer.setSharp(sender.selectedSegment == 1)
+        window.makeFirstResponder(web)
     }
 
     /// The chip's lasting text (nil: none). A flash shows over it for a moment.
@@ -1012,9 +1073,10 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     func key(_ e: NSEvent) -> NSEvent? {
         if typedByVoxl(e) { return nil }
         let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
-        // Control+Option+1 and 2 are always the viewer's; 3 to 9 only where the machine has that screen.
-        if e.type == .keyDown, mods == [.control, .option], let n = digitKeys[e.keyCode],
-           n < max(2, machine.screens.count) {
+        // F1..F9 with nothing else held, on a machine with more than one screen and for one it has;
+        // otherwise the key goes on to the remote.
+        if e.type == .keyDown, mods.isEmpty, let n = fKeys[e.keyCode], machine.screens.count > 1,
+           n < machine.screens.count {
             eaten = e.keyCode
             if !e.isARepeat { go(to: n) }
             return nil
@@ -1314,7 +1376,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         stack.alignment = .leading
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        let shortcuts = small("1 opens with the window. ⌃⌥1, 2 … go to 1, 2 …")
+        let shortcuts = small("1 opens with the window. F1, F2 … go to 1, 2 …")
         for v in [NSStackView(views: [NSTextField(labelWithString: "Machine name:"), nameField]), line(), bold("Screens"),
                   grid, addButton, shortcuts, note, line(), bold("Tab edge, for every machine"), edges, line(),
                   removeButton] {

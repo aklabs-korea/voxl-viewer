@@ -1,7 +1,8 @@
 // One machine's window. It shows one of the machine's screens at a time, in voxl's own page in
 // WebView2, and adds only what a browser tab can't do:
-// - Win+Alt+1..9 (WinKeys.cs) and a tab at the window's edge (Switcher.cs) go to the machine's
-//   screens, Full or Sharp; a chip in the middle names the screen while it connects;
+// - F1..F9 (WinKeys.cs), the tab row (ScreenTabs.cs) and, in full screen, a tab at the window's
+//   edge (Switcher.cs) go to the machine's screens, Full or Sharp; a chip in the middle names the
+//   screen while it connects;
 // - WebView2's browser shortcuts are off, so Ctrl+W/T/R/F5 reach the remote machine;
 // - for a Mac, the Win key reaches the page as the Mac's Control key (WinKeys.cs);
 // - F11 is borderless full screen; the window menu (click the icon or right-click the title bar)
@@ -66,6 +67,7 @@ sealed class ViewerForm : Form
     WinKeys? winKeys;
     readonly Chip chip;
     readonly Switcher switcher;
+    readonly ScreenTabs tabs;
     SettingsForm? settings;
     bool stats, fullScreen, f11Down, forget;
     long f11Time;
@@ -87,9 +89,12 @@ sealed class ViewerForm : Form
         chip = new Chip(this);
         switcher = new Switcher(this);
         web = NewView();
+        tabs = new ScreenTabs(this);
         UpdateTitle();
         PlaceWindow();
         Controls.Add(web);
+        Controls.Add(tabs);
+        web.BringToFront(); // docked last: it fills what the tab row leaves
         audioTimer.Tick += (_, _) => UpdateAudio();
     }
 
@@ -101,8 +106,23 @@ sealed class ViewerForm : Form
     // Whether the page shown is the screen's, loaded: replayed keys (WinKeys.cs) go nowhere else.
     public bool TakesKeys => started && !loading && !down;
 
-    // The picture's place on the screen: the window's client area.
-    public Rectangle PictureArea => RectangleToScreen(ClientRectangle);
+    // The picture's place on the screen: the window's client area, below the tab row.
+    public Rectangle PictureArea
+    {
+        get
+        {
+            var area = ClientRectangle;
+            if (tabs.Visible)
+            {
+                area.Y += tabs.Height;
+                area.Height -= tabs.Height;
+            }
+            return RectangleToScreen(area);
+        }
+    }
+
+    // The tab row is up: the edge tab stays away (it is for full screen).
+    public bool TabsShown => tabs.Visible;
 
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
@@ -126,7 +146,7 @@ sealed class ViewerForm : Form
 
     public string ScreenLabel(int i) => $"{i + 1} · {machine.Screens[i].Name}";
 
-    public static string Shortcut(int i) => i < 9 ? $"Win+Alt+{i + 1}" : "";
+    public static string Shortcut(int i) => i < 9 ? $"F{i + 1}" : "";
 
     Screen ShownScreen => machine.Screens[row];
     bool UsesSharp => Prefs.Sharp && machine.HasSharp;
@@ -146,6 +166,7 @@ sealed class ViewerForm : Form
     {
         base.OnLoad(e);
         winKeys = new WinKeys(this, Handle) { Mac = machine.IsMac, Rows = machine.Screens.Count };
+        tabs.Sync();
         var name = machine.Name;
         Settings.Change(s => s.Last = name);
         audioTimer.Start();
@@ -241,6 +262,7 @@ sealed class ViewerForm : Form
         row = Math.Clamp(to, 0, machine.Screens.Count - 1);
         retryId++;
         UpdateTitle();
+        tabs.Invalidate();
         if (!retry) chip.Say(ScreenLabel(row), 0);
         if (Core is not { } core) return; // StartView connects once WebView2 is up
         loading = true;
@@ -253,7 +275,7 @@ sealed class ViewerForm : Form
         core.Navigate(WithStats(shownUrl, stats));
     }
 
-    // Win+Alt+N, or a screen in the switcher's panel. The screen on show only shows its name again.
+    // F1..F9, a tab, or a screen in the switcher's panel. The screen on show only shows its name again.
     public void SwitchTo(int to)
     {
         if (to >= machine.Screens.Count) chip.Say($"{machine.Name} has no screen {to + 1}", 1500);
@@ -291,6 +313,7 @@ sealed class ViewerForm : Form
     void ApplyView()
     {
         UpdateTitle();
+        tabs.Sync();
         if (shownUrl is not null && ScreenUrl != shownUrl) Connect(row);
     }
 
@@ -665,6 +688,20 @@ sealed class ViewerForm : Form
             WindowState = savedState;
         }
         fullScreen = !fullScreen;
+        tabs.Sync();
+        chip.Place();
+    }
+
+    // After a click on the tab row: keys go on to the remote.
+    public void FocusPicture()
+    {
+        if (web.Visible && InFront) web.Focus();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        tabs.Sync();
     }
 
     protected override void OnHandleCreated(EventArgs e)
