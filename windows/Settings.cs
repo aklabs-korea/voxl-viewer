@@ -16,7 +16,7 @@
 //     "edge": "top",
 //     "sharp": false
 //   }
-// Screens are in the user's order: the first opens with the window and Win+Alt+N goes to the Nth.
+// Screens are in the user's order: the first opens with the window and F{N} goes to the Nth.
 // A screen's "sharp" is a smaller stream of it; the top-level "sharp" shows those (Sharp) instead
 // of the screens' own (Full) on machines whose every screen has one. "last" is the machine a plain
 // launch opens, "windows" each machine's window place, "edge" where the switcher's tab is (top,

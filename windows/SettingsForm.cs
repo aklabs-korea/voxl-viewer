@@ -9,7 +9,7 @@ namespace VoxlViewer;
 
 sealed class SettingsForm : Form
 {
-    const int MaxScreens = 9; // one for each of Win+Alt+1..9
+    const int MaxScreens = 9; // one for each of F1..F9
 
     static readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(3), MaxResponseContentBufferSize = 1 << 20 };
 
@@ -98,7 +98,7 @@ sealed class SettingsForm : Form
         buttons.Controls.Add(NewButton("Move up", () => MoveScreen(-1)));
         buttons.Controls.Add(NewButton("Move down", () => MoveScreen(1)));
         Put(buttons);
-        Put(new Label { Text = "1 opens with the window. Win+Alt+1, 2 … go to 1, 2 …", AutoSize = true });
+        Put(new Label { Text = "1 opens with the window. F1, F2 … go to 1, 2 …", AutoSize = true });
 
         Put(Heading("Tab at the window's edge, for every window"), 14);
         var sides = new TableLayoutPanel { AutoSize = true, ColumnCount = 2 };
@@ -308,7 +308,7 @@ sealed class SettingsForm : Form
         }
         if (screens.Count >= MaxScreens)
         {
-            Complain($"A machine has up to {MaxScreens} screens, one for each of Win+Alt+1 to {MaxScreens}.");
+            Complain($"A machine has up to {MaxScreens} screens, one for each of F1 to F{MaxScreens}.");
             return;
         }
         if (Taken(url, -1) is { } owner)

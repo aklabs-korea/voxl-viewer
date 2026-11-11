@@ -1,5 +1,6 @@
 // What floats over the picture: the chip in the middle that names a screen while it connects, and
-// the switcher, a tab at the window's edge that opens a panel of the machine's screens. Each is a
+// the switcher, a tab at the window's edge that opens a panel of the machine's screens (in full
+// screen, or where the tab row isn't shown). Each is a
 // small window of its own that never activates, so the picture never moves, rescales or resizes,
 // and typing keeps going to the remote. The mouse over WebView2 never reaches WinForms, so a
 // timer watches the pointer while the viewer is in front.
@@ -495,7 +496,8 @@ sealed class Switcher : IDisposable
 
     void Tick()
     {
-        if (!viewer.InFront)
+        // In a window with the tab row, the screens are a click away already.
+        if (!viewer.InFront || viewer.TabsShown)
         {
             HideAll();
             blocked = wasHeld = false;
