@@ -71,6 +71,8 @@ sealed class ViewerForm : Form
     SettingsForm? settings;
     bool stats, fullScreen, f11Down, forget;
     long f11Time;
+    Keys switchDown;  // the F key of the last switch, so its repeats and its release stay here too
+    long switchTime;
     int retryId; // bumped by each success, connect and scheduled retry: only the latest retry runs
     FormWindowState savedState;
     Rectangle savedBounds;
@@ -494,12 +496,18 @@ sealed class ViewerForm : Form
             ? keyData - Keys.F1 : null;
 
     // F1..F9 and F11 reach WebView2 as accelerator keys; handled here, the page never sees them.
-    // A switch goes on the key's release, which never repeats, so it needs no memory of the press.
     void OnWebKeyDown(object? sender, KeyEventArgs e)
     {
-        if (SwitchKey(e.KeyData) is not null)
+        if (SwitchKey(e.KeyData) is { } to)
         {
             e.Handled = true;
+            // As F11 below: autorepeat arrives as more key-downs, and the time limit keeps a lost
+            // key-up from eating the next press.
+            var at = Environment.TickCount64;
+            var again = switchDown == e.KeyCode && at - switchTime < 1500;
+            switchDown = e.KeyCode;
+            switchTime = at;
+            if (!again) BeginInvoke(() => SwitchTo(to)); // the browser process waits while this handler runs
             return;
         }
         if (e.KeyData != Keys.F11) return;
@@ -515,10 +523,11 @@ sealed class ViewerForm : Form
 
     void OnWebKeyUp(object? sender, KeyEventArgs e)
     {
-        if (SwitchKey(e.KeyData) is { } to)
+        // Only the release of a press that switched: a modified F key went to the remote, press and release.
+        if (switchDown != Keys.None && e.KeyCode == switchDown)
         {
             e.Handled = true;
-            BeginInvoke(() => SwitchTo(to)); // the browser process waits while this handler runs
+            switchDown = Keys.None;
             return;
         }
         // Only the release of an F11 handled here: Shift+F11 and the like went to the remote, press and release.
@@ -786,6 +795,7 @@ sealed class ViewerForm : Form
         UpdateAudio();
         winKeys?.Reset();
         f11Down = false;
+        switchDown = Keys.None;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
