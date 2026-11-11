@@ -1,7 +1,7 @@
 // One machine's window. It shows one of the machine's screens at a time, in voxl's own page in
 // WebView2, and adds only what a browser tab can't do:
-// - F1..F9 (WinKeys.cs), the tab row (ScreenTabs.cs) and, in full screen, a tab at the window's
-//   edge (Switcher.cs) go to the machine's screens, Full or Sharp; a chip in the middle names the
+// - F1..F9, the tab row (ScreenTabs.cs) and, in full screen, a tab at the window's edge
+//   (Switcher.cs) go to the machine's screens, Full or Sharp; a chip in the middle names the
 //   screen while it connects;
 // - WebView2's browser shortcuts are off, so Ctrl+W/T/R/F5 reach the remote machine;
 // - for a Mac, the Win key reaches the page as the Mac's Control key (WinKeys.cs);
@@ -165,7 +165,7 @@ sealed class ViewerForm : Form
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        winKeys = new WinKeys(this, Handle) { Mac = machine.IsMac, Rows = machine.Screens.Count };
+        winKeys = new WinKeys(this, Handle) { Mac = machine.IsMac };
         tabs.Sync();
         var name = machine.Name;
         Settings.Change(s => s.Last = name);
@@ -303,7 +303,6 @@ sealed class ViewerForm : Form
         {
             if (winKeys.Mac && !now.IsMac) winKeys.Reset();
             winKeys.Mac = now.IsMac;
-            winKeys.Rows = now.Screens.Count;
         }
         ApplyView();
     }
@@ -486,9 +485,23 @@ sealed class ViewerForm : Form
 
     // ------------------------------------------------------------------ keys
 
-    // F11 reaches WebView2 as an accelerator key; handled here, the page never sees it.
+    // F1..F9 with nothing else held: the screen of that number, on a machine with more than one
+    // screen and for one it has. Anything else goes on to the remote (F2 renames in Explorer).
+    // Not in WinKeys' hook: that keeps its own record of the keys held, and one missed release (or
+    // Windows dropping a hook it found slow) left Win+Alt+N, then F1..F9, dead until a restart.
+    int? SwitchKey(Keys keyData) =>
+        keyData is >= Keys.F1 and <= Keys.F9 && machine.Screens.Count > 1 && keyData - Keys.F1 < machine.Screens.Count
+            ? keyData - Keys.F1 : null;
+
+    // F1..F9 and F11 reach WebView2 as accelerator keys; handled here, the page never sees them.
+    // A switch goes on the key's release, which never repeats, so it needs no memory of the press.
     void OnWebKeyDown(object? sender, KeyEventArgs e)
     {
+        if (SwitchKey(e.KeyData) is not null)
+        {
+            e.Handled = true;
+            return;
+        }
         if (e.KeyData != Keys.F11) return;
         e.Handled = true;
         // Autorepeat arrives as more key-downs. The time limit keeps a lost key-up from eating the
@@ -502,17 +515,30 @@ sealed class ViewerForm : Form
 
     void OnWebKeyUp(object? sender, KeyEventArgs e)
     {
+        if (SwitchKey(e.KeyData) is { } to)
+        {
+            e.Handled = true;
+            BeginInvoke(() => SwitchTo(to)); // the browser process waits while this handler runs
+            return;
+        }
         // Only the release of an F11 handled here: Shift+F11 and the like went to the remote, press and release.
         if (e.KeyCode != Keys.F11 || !f11Down) return;
         e.Handled = true;
         f11Down = false;
     }
 
-    // F11 while the view is hidden (a screen that isn't answering) comes to the window itself.
+    // F1..F9 and F11 while the view is hidden (a screen that loads or isn't answering) come to the
+    // window itself, key-downs only.
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        var repeat = ((long)msg.LParam & 0x40000000) != 0;
+        if (SwitchKey(keyData) is { } to)
+        {
+            if (!repeat) SwitchTo(to);
+            return true;
+        }
         if (keyData != Keys.F11) return base.ProcessCmdKey(ref msg, keyData);
-        if (((long)msg.LParam & 0x40000000) == 0) ToggleFullScreen(); // not an autorepeat
+        if (!repeat) ToggleFullScreen();
         return true;
     }
 
