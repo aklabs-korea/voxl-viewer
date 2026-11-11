@@ -26,6 +26,7 @@ sealed class ScreenTabs : Control
         DoubleBuffered = true;
         TabStop = false;
         SetStyle(ControlStyles.Selectable, false);
+        SetStyle(ControlStyles.ResizeRedraw, true); // Full | Sharp sits at the right edge
         Sync();
     }
 
