@@ -205,6 +205,7 @@ To find where a lost or stuck key went, the Windows app writes `%LOCALAPPDATA%\v
 (and `keys.old.log`, 1 MB each): each key the hook, the window and the page saw while a viewer
 window was in front, and the focus and screen changes around them. It names only modifiers, F
 keys, Esc, Caps Lock and the IME's keys; every other key is written as `key`, never as the letter.
+It does show when and how many keys were typed, with the modifiers held, so think before sharing it.
 
 ### Keys typed by other programs
 
@@ -248,7 +249,7 @@ Settings from earlier versions, with one URL per machine, load as machines with 
 ## Privacy
 
 No telemetry. The apps only connect to the voxl URLs you add. The Windows app's `keys.log`
-(see [Keys](#windows-app)) stays on the PC and holds no letters or text.
+(see [Keys](#windows-app)) stays on the PC and holds no letters or text, only when keys were typed.
 
 ## Build from source
 

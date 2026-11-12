@@ -17,16 +17,21 @@ static class KeyLog
     static int queued;
 
     // From any thread, the key hook's too: it only queues the line, and a pool thread writes it.
-    public static void Write(string what)
+    // `at`: when it happened, if not now (the page's lines arrive a little later).
+    public static void Write(string what, DateTime? at = null)
     {
-        lines.Enqueue($"{DateTime.Now:HH:mm:ss.fff} {what}");
-        if (Interlocked.Exchange(ref queued, 1) == 0) ThreadPool.QueueUserWorkItem(_ => Flush());
+        lines.Enqueue($"{at ?? DateTime.Now:HH:mm:ss.fff} {what}");
+        if (Interlocked.Exchange(ref queued, 1) == 0) ThreadPool.QueueUserWorkItem(_ =>
+        {
+            Thread.Sleep(200); // a burst of keys goes in one write
+            Interlocked.Exchange(ref queued, 0);
+            Flush();
+        });
     }
 
-    static void Flush()
+    // The lines still queued, now: the pool thread's wait would outlast the app at exit.
+    public static void Flush()
     {
-        Thread.Sleep(200); // a burst of keys goes in one write
-        Interlocked.Exchange(ref queued, 0);
         lock (file)
         {
             var text = new StringBuilder();
@@ -37,7 +42,9 @@ static class KeyLog
                 Directory.CreateDirectory(Settings.Dir);
                 if (new FileInfo(FilePath) is { Exists: true, Length: > 1_000_000 })
                     File.Move(FilePath, Path.ChangeExtension(FilePath, ".old.log"), overwrite: true);
-                File.AppendAllText(FilePath, text.ToString());
+                // Shared: a second viewer process (Program.cs, another Windows account running one) appends too.
+                using var stream = new FileStream(FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                stream.Write(Encoding.UTF8.GetBytes(text.ToString()));
             }
             catch (Exception)
             {

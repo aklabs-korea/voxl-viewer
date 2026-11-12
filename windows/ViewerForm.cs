@@ -12,13 +12,14 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using WinScreen = System.Windows.Forms.Screen;
 
 namespace VoxlViewer;
 
-sealed class ViewerForm : Form
+sealed partial class ViewerForm : Form
 {
     // Window-menu commands (Windows keeps the low four bits of WM_SYSCOMMAND for itself).
     const int CmdAdd = 0x1100, CmdSettings = 0x1110, CmdRemove = 0x1120, CmdStartMenu = 0x1130;
@@ -43,11 +44,11 @@ sealed class ViewerForm : Form
         Object.defineProperty(Document.prototype, 'fullscreenEnabled', { get: () => false });
         if (window === window.top) {
           let hold = true, told = false;
-          const log = (s) => window.chrome?.webview?.postMessage('{{LogLine}}' + s);
+          const log = (s) => window.chrome?.webview?.postMessage(`{{LogLine}}${Date.now()} ${s}`);
           const named = /^((Shift|Control|Alt|Meta)(Left|Right)|F\d+|Escape|CapsLock|Lang\d)$/;
           const ime = /^(HangulMode|HanjaMode|Process|AltGraph)$/;
           const what = (e) => (named.test(e.code) ? e.code : 'key') + (ime.test(e.key) ? '/' + e.key : '');
-          const on = () => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.id ? '#' + a.id : '') : 'nothing'; };
+          const on = () => { const a = document.activeElement; return !a ? 'nothing' : ['kbd', 'surface'].includes(a.id) ? '#' + a.id : a.tagName.toLowerCase(); };
           addEventListener('keydown', (e) => {
             if (!e.repeat) log(`page down ${what(e)}${hold ? ' dropped, picture not on yet' : ''}${e.isComposing ? ' composing' : ''} on ${on()}`);
           }, true);
@@ -178,9 +179,10 @@ sealed class ViewerForm : Form
         var view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
         view.KeyDown += OnWebKeyDown;
         view.KeyUp += OnWebKeyUp;
-        // The view's focus events come both from its frame and from WebView2's browser window inside it.
-        view.GotFocus += (_, _) => KeyLog.Write($"{machine.Name} view got focus, keys go to {KeysGoTo()}");
-        view.LostFocus += (_, _) => KeyLog.Write($"{machine.Name} view lost focus, keys go to {KeysGoTo()}");
+        // The view's focus events come both from its frame and from WebView2's browser window inside
+        // it, some late: only where keys go now is written, when it changed.
+        view.GotFocus += (_, _) => LogFocus();
+        view.LostFocus += (_, _) => LogFocus();
         return view;
     }
 
@@ -449,13 +451,19 @@ sealed class ViewerForm : Form
         return other < 0 ? text : $"{text}\n{Shortcut(other)}: {machine.Screens[other].Name}";
     }
 
+    [GeneratedRegex(@"^(\d{13}) (page (?:(?:down|up) (?:(?:Shift|Control|Alt|Meta)(?:Left|Right)|F\d{1,2}|Escape|CapsLock|Lang\d|key)(?:/(?:HangulMode|HanjaMode|Process|AltGraph))?(?: dropped, picture not on yet)?(?: composing)?(?: on (?:#kbd|#surface|[a-z][a-z0-9]{0,15}|nothing))?|lost focus|got focus, on (?:#kbd|#surface|[a-z][a-z0-9]{0,15}|nothing)|visible|hidden))z")]
+    private static partial Regex PageLine();
+
     // The page script's word that the picture is on: the chip goes. Only from the screen on show.
     void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (e.WebMessageAsJson.StartsWith("\"" + LogLine) && JsonSerializer.Deserialize<string>(e.WebMessageAsJson) is { } log)
+        if (e.WebMessageAsJson.StartsWith("\"" + LogLine))
         {
-            var line = new string(log[LogLine.Length..].Where(c => !char.IsControl(c)).Take(160).ToArray());
-            KeyLog.Write($"{machine.Name} {line}");
+            // Only lines the page script writes, at the time the page saw the key: no page can put
+            // other text in keys.log.
+            if (JsonSerializer.Deserialize<string>(e.WebMessageAsJson) is { } log
+                && PageLine().Match(log[LogLine.Length..]) is { Success: true } m && long.TryParse(m.Groups[1].Value, out var ms))
+                KeyLog.Write($"{machine.Name} {m.Groups[2].Value}", DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime);
             return;
         }
         if (down || shownUrl is null || e.WebMessageAsJson != "\"" + Picture + "\"") return;
@@ -587,6 +595,16 @@ sealed class ViewerForm : Form
             KeyLog.Write($"{machine.Name} frame {what} {KeyLog.Name((uint)e.KeyCode)} lost, the page doesn't have the focus yet");
     }
 
+    string? focusLogged;
+
+    void LogFocus()
+    {
+        var now = KeysGoTo();
+        if (now == focusLogged) return;
+        focusLogged = now;
+        KeyLog.Write($"{machine.Name} keys go to {now}");
+    }
+
     string KeysGoTo()
     {
         var focus = GetFocus();
@@ -596,18 +614,22 @@ sealed class ViewerForm : Form
         return focus == web.Handle ? "the frame" : IsChild(web.Handle, focus) ? "the page" : "elsewhere";
     }
 
-    // Keys that come to the window itself, while the view is hidden: lost, but for F1..F9 and F11.
+    // Keys that come to the window itself, mostly while the view is hidden: lost, but for F1..F9
+    // and F11 (ProcessCmdKey), whose release comes here after a switch.
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        KeyLog.Write($"{machine.Name} window down {KeyLog.Name((uint)e.KeyCode)} lost, the view is hidden");
+        LogWindowKey("down", e);
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
     {
         base.OnKeyUp(e);
-        KeyLog.Write($"{machine.Name} window up {KeyLog.Name((uint)e.KeyCode)} lost, the view is hidden");
+        if (SwitchKey(e.KeyCode) is null && e.KeyCode != Keys.F11) LogWindowKey("up", e);
     }
+
+    void LogWindowKey(string what, KeyEventArgs e) =>
+        KeyLog.Write($"{machine.Name} window {what} {KeyLog.Name((uint)e.KeyCode)} lost, {(web.Visible ? "the view doesn't have the focus" : "the view is hidden")}");
 
     // F1..F9 and F11 while the view is hidden (a screen that loads or isn't answering) come to the
     // window itself, key-downs only.
