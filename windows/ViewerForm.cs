@@ -451,7 +451,7 @@ sealed partial class ViewerForm : Form
         return other < 0 ? text : $"{text}\n{Shortcut(other)}: {machine.Screens[other].Name}";
     }
 
-    [GeneratedRegex(@"^(\d{13}) (page (?:(?:down|up) (?:(?:Shift|Control|Alt|Meta)(?:Left|Right)|F\d{1,2}|Escape|CapsLock|Lang\d|key)(?:/(?:HangulMode|HanjaMode|Process|AltGraph))?(?: dropped, picture not on yet)?(?: composing)?(?: on (?:#kbd|#surface|[a-z][a-z0-9]{0,15}|nothing))?|lost focus|got focus, on (?:#kbd|#surface|[a-z][a-z0-9]{0,15}|nothing)|visible|hidden))z")]
+    [GeneratedRegex(@"^(\d{13}) (page (?:(?:down|up) (?:(?:Shift|Control|Alt|Meta)(?:Left|Right)|F\d{1,2}|Escape|CapsLock|Lang\d|key)(?:/(?:HangulMode|HanjaMode|Process|AltGraph))?(?: dropped, picture not on yet)?(?: composing)?(?: on (?:#kbd|#surface|[a-z][a-z0-9]{0,15}|nothing))?|lost focus|got focus, on (?:#kbd|#surface|[a-z][a-z0-9]{0,15}|nothing)|visible|hidden))\z")]
     private static partial Regex PageLine();
 
     // The page script's word that the picture is on: the chip goes. Only from the screen on show.
