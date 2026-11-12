@@ -11,6 +11,7 @@
 // - a screen that doesn't answer is tried again every 3 s, and never swapped for another by itself.
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using WinScreen = System.Windows.Forms.Screen;
@@ -24,8 +25,10 @@ sealed class ViewerForm : Form
     const int CmdFullScreen = 0x1200, CmdReload = 0x1210, CmdStats = 0x1220;
     const int CmdMachine = 0x2000, MaxMachines = 200; // CmdMachine + 16 * index
 
-    // What the page script below posts once a screen's picture is on.
+    // What the page script below posts once a screen's picture is on, and before each line it
+    // adds to keys.log (KeyLog.cs).
     const string Picture = "voxl-viewer:picture";
+    const string LogLine = "voxl-viewer:log ";
 
     // Runs in each page before voxl's own scripts.
     // - voxl's toolbar has a Full screen button whenever the page can go full screen. WebView2's
@@ -34,10 +37,24 @@ sealed class ViewerForm : Form
     // - Keys typed while a screen connects would land on a screen nobody has seen yet: they go
     //   nowhere until its picture plays (voxl shows it in <video>s), or for 3 s. Before its page
     //   has loaded, the view is hidden and takes no keys at all (ShowView).
+    // - keys.log gets each key the page sees, named only if it's a modifier, an F key, Esc, Caps
+    //   Lock or the IME's, with what was focused in the page, and the page's focus changes.
     const string PageScript = $$"""
         Object.defineProperty(Document.prototype, 'fullscreenEnabled', { get: () => false });
         if (window === window.top) {
           let hold = true, told = false;
+          const log = (s) => window.chrome?.webview?.postMessage('{{LogLine}}' + s);
+          const named = /^((Shift|Control|Alt|Meta)(Left|Right)|F\d+|Escape|CapsLock|Lang\d)$/;
+          const ime = /^(HangulMode|HanjaMode|Process|AltGraph)$/;
+          const what = (e) => (named.test(e.code) ? e.code : 'key') + (ime.test(e.key) ? '/' + e.key : '');
+          const on = () => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.id ? '#' + a.id : '') : 'nothing'; };
+          addEventListener('keydown', (e) => {
+            if (!e.repeat) log(`page down ${what(e)}${hold ? ' dropped, picture not on yet' : ''}${e.isComposing ? ' composing' : ''} on ${on()}`);
+          }, true);
+          addEventListener('keyup', (e) => log(`page up ${what(e)}${hold ? ' dropped, picture not on yet' : ''}`), true);
+          addEventListener('blur', (e) => { if (e.target === window) log('page lost focus'); }, true);
+          addEventListener('focus', (e) => { if (e.target === window) log(`page got focus, on ${on()}`); }, true);
+          addEventListener('visibilitychange', () => log(`page ${document.visibilityState}`));
           const drop = (e) => { if (hold) { e.stopImmediatePropagation(); e.preventDefault(); } };
           for (const type of ['keydown', 'keyup', 'keypress', 'input', 'compositionend', 'paste'])
             addEventListener(type, drop, true);
@@ -161,6 +178,9 @@ sealed class ViewerForm : Form
         var view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
         view.KeyDown += OnWebKeyDown;
         view.KeyUp += OnWebKeyUp;
+        // The view's focus events come both from its frame and from WebView2's browser window inside it.
+        view.GotFocus += (_, _) => KeyLog.Write($"{machine.Name} view got focus, keys go to {KeysGoTo()}");
+        view.LostFocus += (_, _) => KeyLog.Write($"{machine.Name} view lost focus, keys go to {KeysGoTo()}");
         return view;
     }
 
@@ -263,6 +283,7 @@ sealed class ViewerForm : Form
     {
         row = Math.Clamp(to, 0, machine.Screens.Count - 1);
         retryId++;
+        KeyLog.Write($"{machine.Name} screen {row + 1} ({ShownScreen.Name}){(retry ? " again" : "")}");
         UpdateTitle();
         tabs.Invalidate();
         if (!retry) chip.Say(ScreenLabel(row), 0);
@@ -402,6 +423,7 @@ sealed class ViewerForm : Form
     {
         var back = down && answering;
         var changed = down == answering;
+        KeyLog.Write($"{machine.Name} page {(answering ? "loaded" : "not answering")}");
         loading = false;
         down = !answering;
         ShowView();
@@ -430,10 +452,19 @@ sealed class ViewerForm : Form
     // The page script's word that the picture is on: the chip goes. Only from the screen on show.
     void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        if (e.WebMessageAsJson.StartsWith("\"" + LogLine) && JsonSerializer.Deserialize<string>(e.WebMessageAsJson) is { } log)
+        {
+            var line = new string(log[LogLine.Length..].Where(c => !char.IsControl(c)).Take(160).ToArray());
+            KeyLog.Write($"{machine.Name} {line}");
+            return;
+        }
         if (down || shownUrl is null || e.WebMessageAsJson != "\"" + Picture + "\"") return;
         if (Uri.TryCreate(e.Source, UriKind.Absolute, out var from) && Uri.Compare(from, new Uri(shownUrl),
                 UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) == 0)
+        {
+            KeyLog.Write($"{machine.Name} picture on");
             chip.FadeBy(0);
+        }
     }
 
     // With WebView2's error pages off, a page whose process died would stay black: load it again.
@@ -510,7 +541,11 @@ sealed class ViewerForm : Form
             if (!again) BeginInvoke(() => SwitchTo(to)); // the browser process waits while this handler runs
             return;
         }
-        if (e.KeyData != Keys.F11) return;
+        if (e.KeyData != Keys.F11)
+        {
+            LogFrameKey("down", e);
+            return;
+        }
         e.Handled = true;
         // Autorepeat arrives as more key-downs. The time limit keeps a lost key-up from eating the
         // next press.
@@ -531,9 +566,47 @@ sealed class ViewerForm : Form
             return;
         }
         // Only the release of an F11 handled here: Shift+F11 and the like went to the remote, press and release.
-        if (e.KeyCode != Keys.F11 || !f11Down) return;
+        if (e.KeyCode != Keys.F11 || !f11Down)
+        {
+            LogFrameKey("up", e);
+            return;
+        }
         e.Handled = true;
         f11Down = false;
+    }
+
+    // The view's KeyDown and KeyUp also come for WebView2's accelerator keys, which the page gets
+    // too. Only a key that came to the frame itself is lost: the frame has the focus until
+    // WebView2 has moved it into its browser window.
+    [DllImport("user32.dll")] static extern IntPtr GetFocus();
+    [DllImport("user32.dll")] static extern bool IsChild(IntPtr parent, IntPtr window);
+
+    void LogFrameKey(string what, KeyEventArgs e)
+    {
+        if (web.IsHandleCreated && GetFocus() == web.Handle)
+            KeyLog.Write($"{machine.Name} frame {what} {KeyLog.Name((uint)e.KeyCode)} lost, the page doesn't have the focus yet");
+    }
+
+    string KeysGoTo()
+    {
+        var focus = GetFocus();
+        if (focus == IntPtr.Zero) return "nothing here";
+        if (focus == Handle) return "the window";
+        if (!web.IsHandleCreated) return "elsewhere";
+        return focus == web.Handle ? "the frame" : IsChild(web.Handle, focus) ? "the page" : "elsewhere";
+    }
+
+    // Keys that come to the window itself, while the view is hidden: lost, but for F1..F9 and F11.
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        KeyLog.Write($"{machine.Name} window down {KeyLog.Name((uint)e.KeyCode)} lost, the view is hidden");
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+        KeyLog.Write($"{machine.Name} window up {KeyLog.Name((uint)e.KeyCode)} lost, the view is hidden");
     }
 
     // F1..F9 and F11 while the view is hidden (a screen that loads or isn't answering) come to the
@@ -698,6 +771,7 @@ sealed class ViewerForm : Form
     {
         if (WindowState == FormWindowState.Minimized) ShowWindow(Handle, 9); // SW_RESTORE, maximized again if it was
         Activate();
+        KeyLog.Write($"{machine.Name} window brought up, {(InFront ? "in front" : "not in front")}");
     }
 
     // Borderless over the whole monitor. Not the page's own fullscreen, which WebView2 leaves on a
@@ -730,6 +804,7 @@ sealed class ViewerForm : Form
     // After a click on the tab row: keys go on to the remote.
     public void FocusPicture()
     {
+        KeyLog.Write($"{machine.Name} tab row clicked");
         if (web.Visible && InFront) web.Focus();
     }
 
@@ -754,6 +829,7 @@ sealed class ViewerForm : Form
     {
         var show = WindowState != FormWindowState.Minimized && (!started || (!loading && !down));
         if (web.Visible == show) return;
+        KeyLog.Write($"{machine.Name} view {(show ? "shown" : "hidden")}");
         // Hidden, the view could keep the focus (its window is WebView2's) and still type into the
         // page being left: the window itself takes the keys meanwhile, F11 among them.
         if (!show && InFront)
@@ -781,9 +857,16 @@ sealed class ViewerForm : Form
         switcher.HideAll();
     }
 
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        KeyLog.Write($"{machine.Name} window opened, {(InFront ? "in front" : "not in front")}");
+    }
+
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
+        KeyLog.Write($"{machine.Name} window in front");
         UpdateAudio();
         web.Focus();
         switcher.Start();
@@ -792,6 +875,7 @@ sealed class ViewerForm : Form
     protected override void OnDeactivate(EventArgs e)
     {
         base.OnDeactivate(e);
+        KeyLog.Write($"{machine.Name} window not in front");
         UpdateAudio();
         winKeys?.Reset();
         f11Down = false;
