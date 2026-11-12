@@ -111,15 +111,16 @@ sealed class WinKeys : IDisposable
     bool InFront => FormHandle != IntPtr.Zero && GetForegroundWindow() == FormHandle;
 
     // On the hook thread, under the lock, for the keyboard's own keys. true: Windows never sees
-    // this key event.
+    // this key event. Written to keys.log while the window is in front, repeats left out.
     bool Decide(uint vk, uint scan, bool down)
     {
         if (!down)
         {
             held.Remove(vk);
-            if (!swallowed.Remove(vk)) return false;
-            Enqueue(vk, scan, false, false);
-            return true;
+            var replay = swallowed.Remove(vk);
+            if (replay) Enqueue(vk, scan, false, false);
+            if (InFront) Log(vk, "up", replay ? "replay" : "pass");
+            return replay;
         }
         if (!held.Add(vk)) // autorepeat
         {
@@ -129,8 +130,8 @@ sealed class WinKeys : IDisposable
             return true;
         }
         if (!InFront) return false;
-        if (!Mac) return false;
-        if (vk is VK_HANGUL or VK_HANJA or VK_PROCESSKEY) return false; // the IME's own keys
+        if (!Mac) return Log(vk, "down", "pass");
+        if (vk is VK_HANGUL or VK_HANJA or VK_PROCESSKEY) return Log(vk, "down", "pass, the IME's key");
         var winHeld = swallowed.Contains(VK_LWIN) || swallowed.Contains(VK_RWIN);
         // While replays are still on their way, later keys join them: a key typed right after a Win
         // chord must not reach the page before the chord's key-ups, or the Mac sees Control+key.
@@ -138,8 +139,16 @@ sealed class WinKeys : IDisposable
         {
             swallowed.Add(vk);
             Enqueue(vk, scan, true, false);
+            Log(vk, "down", vk is VK_LWIN or VK_RWIN ? "replay" : winHeld ? "replay, Win held" : "replay, behind earlier replays");
             return true;
         }
+        return Log(vk, "down", "pass");
+    }
+
+    // keys.log: "M3 hook down LWin replay". false, for a key that passes.
+    bool Log(uint vk, string what, string how)
+    {
+        KeyLog.Write($"{form.Machine.Name} hook {what} {KeyLog.Name(vk)} {how}");
         return false;
     }
 
@@ -160,6 +169,7 @@ sealed class WinKeys : IDisposable
             return false;
         }
         bounced.Add(vk);
+        KeyLog.Write($"{form.Machine.Name} hook down {KeyLog.Name(vk)} dropped, typed by another program");
         return true;
     }
 
@@ -170,6 +180,8 @@ sealed class WinKeys : IDisposable
     {
         lock (sync)
         {
+            if (swallowed.Count > 0)
+                KeyLog.Write($"{form.Machine.Name} hook reset, key-ups replayed for {string.Join(" ", swallowed.Select(KeyLog.Name))}");
             foreach (var vk in swallowed) Enqueue(vk, 0, false, false);
             swallowed.Clear();
             held.Clear();
@@ -212,12 +224,19 @@ sealed class WinKeys : IDisposable
             try
             {
                 // Not into a page still loading, which may be the screen being left.
-                if (form.TakesKeys && form.Core is { } core && Json(k) is { } json)
+                var what = $"{form.Machine.Name} replay {(k.Down ? "down" : "up")} {KeyLog.Name(k.Vk)}";
+                if (!form.TakesKeys || form.Core is not { } core) KeyLog.Write(what + " dropped, page not taking keys");
+                else if (Json(k) is not { } json) KeyLog.Write(what + " dropped, a key voxl can't send");
+                else
+                {
                     await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", json);
+                    KeyLog.Write(what + " in the page");
+                }
             }
-            catch (Exception)
+            catch (Exception e)
             {
                 // The page went away; voxl releases every key on its own when it does.
+                KeyLog.Write($"{form.Machine.Name} replay failed: {e.GetType().Name}");
             }
             finally
             {

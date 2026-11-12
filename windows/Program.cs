@@ -29,6 +29,7 @@ static class Program
         // the first process, which shows the window.
         AllowSetForegroundWindow(-1); // ASFW_ANY
         using var input = new PhysicalInput();
+        Application.ApplicationExit += (_, _) => KeyLog.Flush();
         try
         {
             new App(singleInstance: true).Run(args);

@@ -201,6 +201,12 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | Alt on its own | Goes to the remote (Option on a Mac) instead of opening the window menu |
 | Win+L, Ctrl+Alt+Del | Always stay with Windows |
 
+To find where a lost or stuck key went, the Windows app writes `%LOCALAPPDATA%\voxl-viewer\keys.log`
+(and `keys.old.log`, 1 MB each): each key the hook, the window and the page saw while a viewer
+window was in front, and the focus and screen changes around them. It names only modifiers, F
+keys, Esc, Caps Lock and the IME's keys; every other key is written as `key`, never as the letter.
+It does show when and how many keys were typed, with the modifiers held, so think before sharing it.
+
 ### Keys typed by other programs
 
 Two viewers can show each other: a Mac's window on a PC, and that PC's window on the Mac. A key
@@ -242,7 +248,8 @@ Settings from earlier versions, with one URL per machine, load as machines with 
 
 ## Privacy
 
-No telemetry. The apps only connect to the voxl URLs you add.
+No telemetry. The apps only connect to the voxl URLs you add. The Windows app's `keys.log`
+(see [Keys](#windows-app)) stays on the PC and holds no letters or text, only when keys were typed.
 
 ## Build from source
 
