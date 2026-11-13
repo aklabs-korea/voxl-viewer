@@ -954,11 +954,9 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     var sharp: Bool { sharpChosen && machine.hasSharp }
     var part: Part { parts[screen.url] ?? .whole }
 
-    /// Screen r's page, Full or Sharp: its voxl answers the window routes.
-    func page(_ r: Int) -> URL {
-        let s = machine.screens[r]
-        return sharp ? s.sharp ?? s.url : s.url
-    }
+    /// Screen r's voxl for the window routes: its Full URL, whichever is on view. A Sharp stream shows
+    /// the same display, and one voxl keeps track of a fitted window across a switch.
+    func page(_ r: Int) -> URL { machine.screens[r].url }
 
     /// The page for the screen on view: its Sharp or Full URL, with voxl's stats overlay if it's on.
     var pageURL: URL {
@@ -1166,9 +1164,16 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         fitAsked = Date()
         let f = FitSize.chosen.factor(window.backingScaleFactor), size = content.bounds.size
         let turn = partTurn, url = screen.url
-        windowCall(page(row), "/window/\(id)/fit",
+        let api = page(row)
+        windowCall(api, "/window/\(id)/fit",
                    post: ["w": (size.width * f).rounded(), "h": (size.height * f).rounded()]) { [weak self] status, j in
-            guard let self, turn == self.partTurn, status == 200, let box = windowBox(j) else { return }
+            guard let self, status == 200 else { return }
+            guard turn == self.partTurn else {
+                // Left while voxl fitted it, so the put-back sent on leaving may have come first: again.
+                if self.part.windowID != id { windowCall(api, "/window/\(id)/restore", post: [:]) }
+                return
+            }
+            guard let box = windowBox(j) else { return }
             self.parts[url] = .window(id: id, app: app, box: box)
             self.showPart()
         }

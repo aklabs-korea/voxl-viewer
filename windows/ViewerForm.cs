@@ -528,6 +528,7 @@ sealed partial class ViewerForm : Form
             answered = true;
             e.Response.UserName = login.User;
             e.Response.Password = login.Password;
+            SessionLogins[target] = login;
             return;
         }
         using var dialog = new PasswordDialog(uri.Host, saved?.User, answered);
@@ -539,6 +540,7 @@ sealed partial class ViewerForm : Form
         answered = true;
         e.Response.UserName = dialog.User;
         e.Response.Password = dialog.Password;
+        SessionLogins[target] = (dialog.User, dialog.Password);
         // Saved (or a saved one forgotten) only once the page loads with it.
         pendingLogin = (target, dialog.User, dialog.Password, dialog.Remember);
     }

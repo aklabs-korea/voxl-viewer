@@ -70,8 +70,13 @@ sealed partial class ViewerForm
 
     public string PartLabel => CurrentPart.Kind == PartKind.Whole ? ScreenLabel(row) : $"{ScreenLabel(row)} · {CurrentPart.Name}";
 
-    // Screen r's page, Full or Sharp: its voxl answers the window routes.
-    string PageOf(int r) => UsesSharp ? machine.Screens[r].Sharp! : machine.Screens[r].Url;
+    // Screen r's voxl for the window routes: its Full URL, whichever is on show. A Sharp stream shows the
+    // same display, and one voxl keeps track of a fitted window across a switch.
+    string PageOf(int r) => machine.Screens[r].Url;
+
+    // Passwords this run signed in with, by Credentials.Target: a page's login that wasn't kept in
+    // Credential Manager.
+    internal static readonly Dictionary<string, (string User, string Password)> SessionLogins = new();
 
     // The screen's key or tab again.
     void Step()
@@ -178,9 +183,17 @@ sealed partial class ViewerForm
         var area = PictureArea.Size; // pixels here
         var turn = partTurn;
         var url = ShownScreen.Url;
-        var (status, j) = await WindowCall(PageOf(row), $"/window/{p.Id}/fit",
+        var api = PageOf(row);
+        var (status, j) = await WindowCall(api, $"/window/{p.Id}/fit",
             new { w = Math.Round(area.Width / k * f), h = Math.Round(area.Height / k * f) });
-        if (turn != partTurn || IsDisposed || status != 200 || WindowBox(j) is not { } box) return;
+        if (IsDisposed || status != 200) return;
+        if (turn != partTurn)
+        {
+            // Left while voxl fitted it, so the put-back sent on leaving may have come first: again.
+            if (CurrentPart.Id != p.Id || CurrentPart.Kind != PartKind.Window) _ = WindowCall(api, $"/window/{p.Id}/restore", new { });
+            return;
+        }
+        if (WindowBox(j) is not { } box) return;
         parts[url] = p with { Window = box };
         ShowPart();
     }
@@ -240,6 +253,7 @@ sealed partial class ViewerForm
         try
         {
             var uri = new Uri(page);
+            var target = Credentials.Target(uri);
             // voxl listens on IPv4 by default, and Windows takes 2 s to give up on localhost's IPv6.
             if (uri.IsLoopback && uri.Host == "localhost") uri = new UriBuilder(uri) { Host = "127.0.0.1" }.Uri;
             using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, new Uri(uri, path));
@@ -248,7 +262,7 @@ sealed partial class ViewerForm
                 .FirstOrDefault(q => q[0] == "token" && q.Length == 2)?[1];
             if (token is not null)
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Uri.UnescapeDataString(token));
-            else if (Credentials.Read(Credentials.Target(uri)) is { } login)
+            else if ((SessionLogins.TryGetValue(target, out var signed) ? signed : Credentials.Read(target)) is { } login)
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
                     Convert.ToBase64String(Encoding.UTF8.GetBytes($"{login.User}:{login.Password}")));
             if (body is not null) request.Content = JsonContent.Create(body);

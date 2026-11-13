@@ -60,8 +60,8 @@
     if (e.clientX >= b.left && e.clientX < b.right && e.clientY >= b.top && e.clientY < b.bottom) return;
     e.stopImmediatePropagation();
     e.preventDefault();
-    // A release still goes, so no button stays held on the remote.
-    if (!(e.type === 'pointermove' || e.type === 'pointerup') || e.pointerType === 'touch') return;
+    // A release still goes, a touch's too, so no button stays held on the remote.
+    if (!(e.type === 'pointermove' || e.type === 'pointerup')) return;
     const c = new PointerEvent(e.type, {
       clientX: clamp(e.clientX, b.left, b.right - 1), clientY: clamp(e.clientY, b.top, b.bottom - 1),
       pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: e.isPrimary,
