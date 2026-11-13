@@ -169,6 +169,7 @@ final class KeyBar: UIView {
             c.buttonSize = .medium
             c.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
             b.configuration = c
+            b.accessibilityValue = a.contains(code) ? "on" : "off"
         }
     }
 

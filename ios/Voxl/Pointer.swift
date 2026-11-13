@@ -15,7 +15,15 @@ import UIKit
 final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteractionDelegate {
     enum Mode { case trackpad, direct }
 
-    var mode: Mode = .trackpad { didSet { onChange?() } }
+    var mode: Mode = .trackpad {
+        didSet {
+            if dragging {
+                send("up", 0)
+                dragging = false
+            }
+            onChange?()
+        }
+    }
     /// The desktop's size in pixels, from voxl's hello.
     var desk = CGSize(width: 4096, height: 1728)
     /// Where the Mac's pointer is, in desktop pixels.
@@ -180,9 +188,9 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
     }
 
     @objc private func hold(_ g: UILongPressGestureRecognizer) {
-        guard !(direct && onPicture(g)) else { return }
         switch g.state {
         case .began:
+            guard !(direct && onPicture(g)) else { return }
             send("down", 0)
             dragging = true
             haptic.impactOccurred()

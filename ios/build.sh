@@ -3,7 +3,7 @@
 #
 #   ios/build.sh sim          build for a simulator, install it there and open it
 #   ios/build.sh uitest       the gesture and key test in a simulator (needs a dev voxl: see GestureTests);
-#                             ONLY=testLayout runs one test
+#                             ONLY=GestureTests/testLayout or ONLY=ReproTests runs part of it
 #   ios/build.sh testflight   archive, sign in Apple's cloud and upload to TestFlight
 #
 # SIM=<name or id> picks the simulator (default: the first iPhone Duo).
@@ -41,7 +41,7 @@ sim)
 uitest)
   xcodebuild test -project Voxl.xcodeproj -scheme Voxl -destination "platform=iOS Simulator,id=$(simulator)" \
     -derivedDataPath "$work/dd-sim" CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
-    VOXL_TESTLOG="$testlog" ${ONLY:+-only-testing:VoxlUITests/GestureTests/$ONLY} -quiet
+    VOXL_TESTLOG="$testlog" ${ONLY:+-only-testing:VoxlUITests/$ONLY} -quiet
   ;;
 testflight)
   source "${ASC_ENV:-$HOME/.appstoreconnect/asc.env}"

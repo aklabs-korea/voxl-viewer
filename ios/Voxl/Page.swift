@@ -22,13 +22,16 @@ enum Page {
       if (W) window.Worker = class extends W {
         constructor(...args) {
           super(...args);
-          if (window.voxlTrace) {
-            const send = this.postMessage.bind(this);
-            this.postMessage = (m, t) => {
-              if (m && m.t === 'send' && typeof m.d === 'string' && !/^(a|po),/.test(m.d)) post({ t: 'sent', d: trace(m.d) });
-              return t ? send(m, t) : send(m);
-            };
-          }
+          // voxl pings every page twice a second and the page answers; the app hears of it once a second.
+          const send = this.postMessage.bind(this);
+          let alive = 0;
+          this.postMessage = (m, t) => {
+            if (m && m.t === 'send' && typeof m.d === 'string') {
+              if (/^po,/.test(m.d) && Date.now() - alive > 1000) { alive = Date.now(); post({ t: 'alive' }); }
+              if (window.voxlTrace && !/^(a|po),/.test(m.d)) post({ t: 'sent', d: trace(m.d) });
+            }
+            return t ? send(m, t) : send(m);
+          };
           this.addEventListener('message', (e) => {
             const m = e.data || {};
             if (m.t === 'hello') post({ t: 'hello', w: m.w, h: m.h, os: m.os || '', readOnly: !!m.readOnly });
@@ -92,8 +95,11 @@ enum Page {
       };
       window.voxlChord = (mods, k, code) => { press(mods); key('keydown', k, code, mods); key('keyup', k, code, mods); lift(mods); };
       // A soft-keyboard or hardware key after the bar's modifier: the modifier goes down first and up after it.
+      const letGo = () => { if (holding) { const m = holding.mods; holding = null; lift(m); } };
       document.addEventListener('keydown', (e) => {
-        if (!e.isTrusted || !armed.length || MOD[e.code] || e.key === 'Meta' || e.key === 'Shift') return;
+        if (!e.isTrusted) return;
+        if (holding && e.code !== holding.code) letGo();
+        if (!armed.length || MOD[e.code] || e.key === 'Meta' || e.key === 'Shift') return;
         holding = { code: e.code, mods: armed }; disarm(); press(holding.mods);
       }, true);
       document.addEventListener('keyup', (e) => {
@@ -107,6 +113,7 @@ enum Page {
                        pointerId: 1, isPrimary: true, bubbles: true, cancelable: true, button: button || 0 };
         if (type === 'move') s.dispatchEvent(new PointerEvent('pointermove', { ...init, button: -1 }));
         else if (type === 'down') {
+          letGo();
           if (armed.length) { clickMods = armed; disarm(); press(clickMods); }
           s.dispatchEvent(new PointerEvent('pointerdown', init));
         } else if (type === 'up') {

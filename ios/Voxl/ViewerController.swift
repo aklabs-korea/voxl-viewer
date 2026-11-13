@@ -42,6 +42,14 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     var tooWide = false
     /// Dan cancelled voxl's password sheet: nothing tries again until he asks.
     var needsPassword = false
+    /// What the cover's button does: it follows what the cover says, never a flag left from before.
+    enum CoverAction { case none, otherScreen, sharp, signIn, machines }
+    var coverAction = CoverAction.none
+    /// This page's socket closed once: the next open is a reconnect.
+    var reconnecting = false
+    /// When voxl last pinged this page (the page answers every ping): a socket that stays open but
+    /// carries nothing stops them.
+    var lastAlive = Date()
     var waitLater, retryLater, helloLater: DispatchWorkItem?
     /// The desktop's shape, from voxl's hello; Sharp's until then.
     var aspect: CGFloat = 4096.0 / 1728.0
@@ -171,7 +179,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         updateNav()
 
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
-        if machines.isEmpty { cover.show("No machines yet.", button: "Add a machine") }
+        if machines.isEmpty { showCover("No machines yet.", button: "Add a machine", action: .machines) }
     }
 
     // MARK: Layout
@@ -271,6 +279,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             c.buttonSize = .small
             c.titleLineBreakMode = .byTruncatingTail
             let b = UIButton(configuration: c)
+            b.isSelected = i == row
             b.titleLabel?.numberOfLines = 1
             b.addAction(UIAction { [weak self] _ in self?.go(to: i) }, for: .primaryActionTriggered)
             tabs.addArrangedSubview(b)
@@ -339,9 +348,9 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         w.uiDelegate = self
         w.isInspectable = true
         pictureBox.insertSubview(w, at: 0)
+        w.setAllMediaPlaybackSuspended(true, completionHandler: nil)
         web = w
         muted = nil
-        updateAudio()
     }
 
     func load() {
@@ -357,7 +366,10 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         picture = false
         tooWide = false
         needsPassword = false
-        if !failing { cover.show(label) }
+        reconnecting = false
+        lastAlive = Date()
+        keyBar.setArmed([])
+        if !failing { showCover(label) }
         TestLog.shared.add("load", ["screen": label])
         waitThenCheck()
         watchHello()
@@ -418,7 +430,8 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             let o = row == 0 ? 1 : 0
             other = "Show \(o + 1) · \(m.screens[o].name)"
         }
-        cover.show("\(screen?.name ?? "") isn't answering. Trying again every 3 s.", button: other, dim: true)
+        showCover("\(screen?.name ?? "") isn't answering. Trying again every 3 s.", button: other,
+                  action: other == nil ? .none : .otherScreen, dim: true)
     }
 
     func retry(_ why: String) {
@@ -430,10 +443,20 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
+    /// The cover with this text, and what its button (if any) does.
+    func showCover(_ text: String, button: String? = nil, action: CoverAction = .none, dim: Bool = false) {
+        coverAction = button == nil ? .none : action
+        cover.show(text, button: button, dim: dim)
+    }
+
     func coverButton() {
-        if machines.isEmpty { return showMachines() }
-        if needsPassword { return load() }
-        if failing, let m = machine, m.screens.count > 1 { return go(to: row == 0 ? 1 : 0) }
+        switch coverAction {
+        case .none: return
+        case .machines: return showMachines()
+        case .signIn: return load()
+        case .otherScreen: return go(to: row == 0 ? 1 : 0)
+        case .sharp: break
+        }
         // The picture is wider than this app plays: this screen asks for Sharp from now on.
         if let screen, screen.sharp == nil {
             var list = Store.machines
@@ -467,7 +490,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         updateNav()
         guard machine != nil else {
             closePage()
-            return cover.show("No machines yet.", button: "Add a machine")
+            return showCover("No machines yet.", button: "Add a machine", action: .machines)
         }
         if screen?.page != before || web == nil {
             failing = false
@@ -501,6 +524,10 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         guard w === web else { return }
         answered = true
         committed = true
+        if failing {
+            failing = false
+            showCover(label)
+        }
         updateAudio()
     }
 
@@ -520,7 +547,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
                 self.helloLater?.cancel()
                 self.waitLater?.cancel()
                 self.needsPassword = true
-                self.cover.show("\(self.screen?.name ?? "This screen") needs its voxl password.", button: "Sign in")
+                self.showCover("\(self.screen?.name ?? "This screen") needs its voxl password.", button: "Sign in", action: .signIn)
             }
             done(d, c)
         }
@@ -591,23 +618,38 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             TestLog.shared.add("hello", ["w": w, "h": h, "os": body["os"] as? String ?? ""])
             tooWide = w > 4096
             if tooWide {
-                cover.show("Another viewer asked \(screen?.name ?? "") for Full (\(Int(w)) px wide). This app plays up to Sharp (4096).",
-                           button: "Ask for Sharp")
+                showCover("Another viewer asked \(screen?.name ?? "") for Full (\(Int(w)) px wide). This app plays up to Sharp (4096).",
+                          button: "Ask for Sharp", action: .sharp)
+            } else if picture {
+                cover.hide()
             }
         case "picture":
             picture = true
             failing = false
             waitLater?.cancel()
             if !tooWide { cover.hide() }
+            lastAlive = Date()
             focusKeys()
             TestLog.shared.add("picture", ["screen": label])
+            if TestLog.shared.on {
+                web?.evaluateJavaScript("navigator.audioSession ? navigator.audioSession.type : 'none'") { r, _ in
+                    TestLog.shared.add("session", ["type": r as? String ?? "?"])
+                }
+            }
         case "status":
             let s = body["s"] as? String ?? ""
             TestLog.shared.add("socket", ["s": s])
             if s == "closed" {
                 hello = false
+                reconnecting = true
                 watchHello()
+            } else if s == "open", reconnecting {
+                reconnecting = false
+                release()
             }
+            lastAlive = Date()
+        case "alive":
+            lastAlive = Date()
         case "stats":
             stats = body
         case "sent":
@@ -692,6 +734,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         closeLater?.cancel()
         endBackgroundTask()
         TestLog.shared.add("active")
+        lastAlive = Date()
         if web == nil { load() } else if picture { focusKeys() }
         updateAudio()
         updateIdle()
@@ -735,6 +778,10 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         ticks += 1
         updateAudio()
         updateIdle()
+        if picture, hello, active, web != nil, Date().timeIntervalSince(lastAlive) > 10 {
+            TestLog.shared.add("silent")
+            load()
+        }
         if TestLog.shared.on {
             if ticks % 5 == 0, picture, active { TestLog.shared.add("stats", stats) }
             if ticks % 30 == 1 { TestLog.shared.health() }
@@ -792,6 +839,7 @@ final class Cover: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func show(_ message: String, button title: String? = nil, dim: Bool = false) {
+        TestLog.shared.add("cover", ["text": message, "button": title ?? ""])
         text.text = message
         button.configuration?.title = title
         button.configuration?.baseBackgroundColor = dim ? UIColor(white: 0.18, alpha: 1) : .systemBlue
@@ -799,5 +847,8 @@ final class Cover: UIView {
         isHidden = false
     }
 
-    func hide() { isHidden = true }
+    func hide() {
+        if !isHidden { TestLog.shared.add("cover", ["hidden": true]) }
+        isHidden = true
+    }
 }
