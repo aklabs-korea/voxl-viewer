@@ -191,9 +191,9 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         let f = Layout.frames(size: view.bounds.size, safe: view.safeAreaInsets, fold: fold,
                               keyboardTop: keyboardTop, aspect: pointer.aspect)
         nav.frame = f.nav
-        // Keep the tabs clear of a camera over the screen (the outer screen's is always there).
+        // Keep the tabs clear of a camera over the screen (the outer screen's), not of a band across it (an iPad's top).
         var lead: CGFloat = 8, trail: CGFloat = 8
-        for r in view.reservedRegions(kind: .occlusion) where r.isActive && r.frame.intersects(f.nav) {
+        for r in view.reservedRegions(kind: .occlusion) where r.isActive && r.frame.intersects(f.nav) && r.frame.width < f.nav.width / 2 {
             if r.frame.midX > f.nav.midX { trail = max(trail, f.nav.maxX - r.frame.minX + 8) }
             else { lead = max(lead, r.frame.maxX - f.nav.minX + 8) }
         }

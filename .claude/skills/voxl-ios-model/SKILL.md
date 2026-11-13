@@ -347,8 +347,9 @@ version moves.
 
 Sync: voxl-viewer `5e57a1f` (branch `ios-duo`, aklabs-korea/voxl-viewer), voxl 0.3.4; then branch `screen-parts`
 (a screen's part), which moves no model action: its A lines above are the branch's, and its R server.rs lines moved
-by three with voxl patch 0017 (window routes, three lines in router()). Line numbers above are at
-these. Move this line, and record `covered.sha256` again, only after you confirmed the models describe the code
+by three with voxl patch 0017 (window routes, three lines in router()); then branch `ipad-topbar` (the top
+bar's margins skip a band across it, ViewerController.swift:194-196), which moves no model action and no line.
+Line numbers above are at these. Move this line, and record `covered.sha256` again, only after you confirmed the models describe the code
 at the new commit.
 
 ## When you change covered code

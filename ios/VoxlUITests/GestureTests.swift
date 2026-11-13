@@ -44,7 +44,8 @@ final class GestureTests: XCTestCase {
         add.tap()
     }
 
-    /// Any device (SIM=...): the machines go in, the picture plays, and the screen is kept for a look.
+    /// Any device (SIM=...): the machines go in, the picture plays, the top bar keeps its buttons, and the screen is
+    /// kept for a look.
     func testLayout() throws {
         let app = XCUIApplication()
         app.launch()
@@ -52,6 +53,7 @@ final class GestureTests: XCTestCase {
         expectation(for: NSPredicate(format: "isHittable == false"), evaluatedWith: app.otherElements["cover"])
         waitForExpectations(timeout: 40)
         sleep(3)
+        XCTAssertTrue(app.buttons["More"].isHittable, "the top bar lost its buttons")
         let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         shot.name = "layout"
         shot.lifetime = .keepAlways
