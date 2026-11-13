@@ -95,17 +95,6 @@ final class ReproTests: XCTestCase {
         waitForPicture(20)
     }
 
-    /// 5: the socket goes silent without closing: the app gets a fresh page by itself (the cover shows while
-    /// it connects), and that page plays.
-    func testSilentSocketGetsAFreshPage() {
-        addDevMachines()
-        waitForPicture()
-        proxy("silence")
-        expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: cover)
-        waitForExpectations(timeout: 25)
-        waitForPicture(30)
-    }
-
     /// 9: an armed ⌘ isn't shown lit once the page that had it is gone.
     func testBarModifierNotLitAfterReload() {
         addDevMachines()

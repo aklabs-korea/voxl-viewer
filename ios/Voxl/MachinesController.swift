@@ -121,7 +121,7 @@ final class MachineEditor: UITableViewController {
     override func tableView(_ t: UITableView, titleForHeaderInSection s: Int) -> String? { s == 1 ? "Screens" : nil }
 
     override func tableView(_ t: UITableView, titleForFooterInSection s: Int) -> String? {
-        s == 1 ? "Screen N opens with tab N and F-key N. Sharp asks the screen for 4096 pixels across, for a screen wider than this device can play." : nil
+        s == 1 ? "Screen N opens with tab N and F-key N. Sharp asks the screen for 4096 pixels across, for a screen wider than this device can play; it needs a voxl with Dan's capture-scale patch (stock voxl ignores it)." : nil
     }
 
     override func tableView(_ t: UITableView, cellForRowAt i: IndexPath) -> UITableViewCell {

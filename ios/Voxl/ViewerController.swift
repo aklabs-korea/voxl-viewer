@@ -47,9 +47,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     var coverAction = CoverAction.none
     /// This page's socket closed once: the next open is a reconnect.
     var reconnecting = false
-    /// When voxl last pinged this page (the page answers every ping): a socket that stays open but
-    /// carries nothing stops them.
-    var lastAlive = Date()
     var waitLater, retryLater, helloLater: DispatchWorkItem?
     /// The desktop's shape, from voxl's hello; Sharp's until then.
     var aspect: CGFloat = 4096.0 / 1728.0
@@ -367,7 +364,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         tooWide = false
         needsPassword = false
         reconnecting = false
-        lastAlive = Date()
         keyBar.setArmed([])
         if !failing { showCover(label) }
         TestLog.shared.add("load", ["screen": label])
@@ -540,8 +536,14 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     /// A voxl that keeps a password: Password answers, with the sheet if it must ask. Being asked is an answer.
     func webView(_ w: WKWebView, didReceive ch: URLAuthenticationChallenge,
                  completionHandler done: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        if w === web { answered = true }
+        if w === web {
+            answered = true
+            // Nothing tries again while the sheet waits for Dan; the watch starts over once he answers.
+            helloLater?.cancel()
+            waitLater?.cancel()
+        }
         Password.answer(ch, over: self, name: label) { [weak self] d, c in
+            if d == .useCredential, let self, w === self.web, !self.hello { self.watchHello() }
             // Cancelled: no new try every 10 s; the cover offers to sign in again.
             if d == .cancelAuthenticationChallenge, let self, w === self.web {
                 self.helloLater?.cancel()
@@ -599,6 +601,8 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         guard m.webView === web, let url = loaded, m.frameInfo.securityOrigin.host == url.host else { return }
         if m.name == "clip" {
             if active, let text = m.body as? String { UIPasteboard.general.string = text }
+            if active, let png = (m.body as? [String: Any])?["png"] as? String, let data = Data(base64Encoded: png),
+               let image = UIImage(data: data) { UIPasteboard.general.image = image }
             return
         }
         guard let body = m.body as? [String: Any], let t = body["t"] as? String else { return }
@@ -628,7 +632,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             failing = false
             waitLater?.cancel()
             if !tooWide { cover.hide() }
-            lastAlive = Date()
             focusKeys()
             TestLog.shared.add("picture", ["screen": label])
             if TestLog.shared.on {
@@ -647,9 +650,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
                 reconnecting = false
                 release()
             }
-            lastAlive = Date()
-        case "alive":
-            lastAlive = Date()
         case "stats":
             stats = body
         case "sent":
@@ -734,7 +734,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         closeLater?.cancel()
         endBackgroundTask()
         TestLog.shared.add("active")
-        lastAlive = Date()
         if web == nil { load() } else if picture { focusKeys() }
         updateAudio()
         updateIdle()
@@ -778,10 +777,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         ticks += 1
         updateAudio()
         updateIdle()
-        if picture, hello, active, web != nil, Date().timeIntervalSince(lastAlive) > 10 {
-            TestLog.shared.add("silent")
-            load()
-        }
         if TestLog.shared.on {
             if ticks % 5 == 0, picture, active { TestLog.shared.add("stats", stats) }
             if ticks % 30 == 1 { TestLog.shared.health() }

@@ -22,16 +22,13 @@ enum Page {
       if (W) window.Worker = class extends W {
         constructor(...args) {
           super(...args);
-          // voxl pings every page twice a second and the page answers; the app hears of it once a second.
-          const send = this.postMessage.bind(this);
-          let alive = 0;
-          this.postMessage = (m, t) => {
-            if (m && m.t === 'send' && typeof m.d === 'string') {
-              if (/^po,/.test(m.d) && Date.now() - alive > 1000) { alive = Date.now(); post({ t: 'alive' }); }
-              if (window.voxlTrace && !/^(a|po),/.test(m.d)) post({ t: 'sent', d: trace(m.d) });
-            }
-            return t ? send(m, t) : send(m);
-          };
+          if (window.voxlTrace) {
+            const send = this.postMessage.bind(this);
+            this.postMessage = (m, t) => {
+              if (m && m.t === 'send' && typeof m.d === 'string' && !/^(a|po),/.test(m.d)) post({ t: 'sent', d: trace(m.d) });
+              return t ? send(m, t) : send(m);
+            };
+          }
           this.addEventListener('message', (e) => {
             const m = e.data || {};
             if (m.t === 'hello') post({ t: 'hello', w: m.w, h: m.h, os: m.os || '', readOnly: !!m.readOnly });
@@ -150,7 +147,7 @@ enum Page {
           const c = s.style.cursor || '';
           if (c === last) return;
           last = c;
-          const m = c.match(/url\\((data:[^)]+)\\)\\s+(\\d+)\\s+(\\d+)/);
+          const m = c.match(/url\\(\\s*["']?(data:[^"')]+)["']?\\s*\\)\\s+(\\d+)\\s+(\\d+)/);
           post(m ? { t: 'cursor', url: m[1], hx: +m[2], hy: +m[3] } : { t: 'cursor', none: c === 'none' });
         }).observe(s, { attributes: true, attributeFilter: ['style'] });
         // voxl's Files panel takes touches while it's open; the app's touch layer steps aside.
