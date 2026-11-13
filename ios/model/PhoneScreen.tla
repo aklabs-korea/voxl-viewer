@@ -53,7 +53,7 @@ DanNames   == {"touch", "idle", "leave", "switch", "cover", "reconnect"}
 EventNames == {"down", "drop", "hang", "crash", "full", "dead"}
 Guards     == {"ResignMutes", "TickMutes", "ActiveRule", "CommitAudio", "FreshMute", "FreshSuspend",
                "PictureHides", "HelloHides", "WatchHello", "CommitClearsFailing", "CoverAction",
-               "WideWaits"}
+               "WideWaits", "HelloSharp"}
 
 ASSUME /\ DanActs \subseteq DanNames /\ Events \subseteq EventNames /\ Off \subseteq Guards
        /\ DanMax \in Nat /\ EnvMax \in Nat
@@ -66,7 +66,7 @@ Drop1(q, x) == SelectSeq(q, LAMBDA y : y # x)
 
 VARIABLES
   scene,     \* "active", "inactive", "background", "suspended" (A App.swift:25-28)
-  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:56, 716)
+  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:56, 725)
   row,       \* the screen asked for
   web,       \* a web view exists
   dscr,      \* the screen the view's page was loaded for (loaded, :38)
@@ -77,9 +77,9 @@ VARIABLES
   retryT,    \* retryLater: "none", "cond" (waited's, :403-408: loads only if still unanswered),
              \* "always" (retry's, :438-440)
   helloT,    \* helloLater (10 s, :412-421): "off", or armed by "load" or by a socket "closed"
-  closeT,    \* closeLater armed (30 s, :766-771)
+  closeT,    \* closeLater armed (30 s, :775-780)
   wideT,     \* tooWideLater armed (2 s, :50, 627-636)
-  cover,     \* the Cover (:818-859) as showCover left it (:444-447): "off" (hidden), "label"
+  cover,     \* the Cover (:827-868) as showCover left it (:444-447): "off" (hidden), "label"
              \* (the screen's name, no button), "dim" ("isn't answering. Trying again every 3 s."
              \* + "Show <other>", action otherScreen), "full" ("Another viewer asked ... for Full
              \* ..." + "Ask for Sharp", action sharp)
@@ -123,7 +123,7 @@ Set(r) == /\ scene' = r.scene /\ recent' = r.recent /\ row' = r.row /\ web' = r.
 -----------------------------------------------------------------------------
 (* The app's code *)
 
-\* updateAudio (A ViewerController.swift:720-730): audible = committed &&
+\* updateAudio (A ViewerController.swift:729-739): audible = committed &&
 \* active && recentInput; nothing happens if muted already says so; else the
 \* view's suspension and the page's audio session type. The script call runs
 \* in the view's document now: if voxl's page hasn't committed yet it lands in
@@ -137,7 +137,7 @@ UpdateAudio(r) ==
           ELSE [r EXCEPT !.muted = m, !.susp = ~a,
                          !.session = IF r.nav = "page" THEN (IF a THEN "playback" ELSE "ambient") ELSE @]
 
-\* input() (:710-714): updateAudio only when back from 5 minutes idle.
+\* input() (:719-723): updateAudio only when back from 5 minutes idle.
 Input(r) == LET r1 == [r EXCEPT !.recent = TRUE] IN IF r.recent THEN r1 ELSE UpdateAudio(r1)
 
 \* The page in the view goes: its socket closes, and voxl drops the phone's
@@ -179,16 +179,22 @@ ClosePage(r) ==
   ELSE [DocGone(r) EXCEPT !.web = FALSE, !.committed = FALSE, !.waitT = FALSE, !.retryT = "none",
                           !.helloT = "off", !.wideT = FALSE]
 
-\* The page's messages (:601-686). hello (:611-639): tooWide arms
+\* The page's messages (:601-692). hello (:611-648): tooWide arms
 \* tooWideLater, which puts up the Full cover 2 s later if tooWide still holds
 \* (every connection first hears Full until the page's Sharp request lands); a
-\* playable hello cancels it and takes the cover away once the picture played.
-\* Without WideWaits, as before eb7470e: the Full cover at once. status closed
-\* (:655-658). picture (:640-651).
+\* playable hello cancels it and takes the cover away once the picture played
+\* (:637-638), and before a frame, since ce88951, takes a Full cover back to
+\* the label (coverAction is .sharp, :639-641: only the Full cover has that
+\* action, and cover.hide() runs only once the picture played). Without
+\* WideWaits, as before eb7470e: the Full cover at once. The hello's blur and
+\* keyBar.resend (:643-648) are keys: PhoneKeys. status closed (:664-667).
+\* picture (:649-660).
 HelloIn(r, w) ==
   [r EXCEPT !.hello = TRUE, !.helloT = "off", !.tooWide = w, !.wideT = w /\ Has("WideWaits"),
             !.cover = IF w THEN (IF Has("WideWaits") THEN @ ELSE "full")
-                      ELSE IF r.picture /\ Has("HelloHides") THEN "off" ELSE @]
+                      ELSE IF r.picture THEN (IF Has("HelloHides") THEN "off" ELSE @)
+                      ELSE IF r.cover = "full" /\ Has("HelloSharp") THEN "label"
+                      ELSE @]
 StatusClosed(r) == [r EXCEPT !.hello = FALSE, !.helloT = IF Has("WatchHello") THEN "closed" ELSE @]
 PictureIn(r) ==
   [r EXCEPT !.picture = TRUE, !.failing = FALSE, !.waitT = FALSE,
@@ -261,7 +267,7 @@ Answer ==
                ELSE r0
      IN Set(IF Has("CommitAudio") THEN UpdateAudio(r1) ELSE r1)
 
-\* The 1 s tick (:786-795), when updateAudio has work.
+\* The 1 s tick (:795-804), when updateAudio has work.
 Tick == Has("TickMutes") /\ scene # "suspended" /\ UpdateAudio(Now) # Now /\ Set(UpdateAudio(Now))
 
 \* voxl answers the load quickly, unless SlowAnswer.
@@ -324,7 +330,7 @@ TooWideFires ==
   /\ wideT /\ Ticking
   /\ Set([Now EXCEPT !.wideT = FALSE, !.cover = IF tooWide THEN "full" ELSE @])
 
-\* closeLater, or the background task's expiry (:762-771): closePage.
+\* closeLater, or the background task's expiry (:771-780): closePage.
 CloseFires == closeT /\ scene = "background" /\ Settled /\ Set(ClosePage([Now EXCEPT !.closeT = FALSE]))
 
 -----------------------------------------------------------------------------
@@ -332,7 +338,7 @@ CloseFires == closeT /\ scene = "background" /\ Settled /\ Set(ClosePage([Now EX
 
 Dan(a) == a \in DanActs /\ dann < DanMax
 
-\* sceneDidBecomeActive -> becameActive (:741-750): active, input(), the
+\* sceneDidBecomeActive -> becameActive (:750-759): active, input(), the
 \* close cancelled, load() if there is no view, updateAudio.
 BecomeActive ==
   /\ scene = "inactive"
@@ -340,20 +346,20 @@ BecomeActive ==
          r1 == IF ~r0.web THEN Load(r0) ELSE r0
      IN Set(UpdateAudio(r1))
 
-\* sceneWillResignActive -> resignedActive (:752-758).
+\* sceneWillResignActive -> resignedActive (:761-767).
 Resign ==
   /\ Dan("leave") /\ scene = "active"
   /\ LET r0 == [Now EXCEPT !.scene = "inactive", !.dann = @ + 1]
      IN Set(IF Has("ResignMutes") THEN UpdateAudio(r0) ELSE r0)
 
-\* sceneDidEnterBackground -> enteredBackground (:760-773).
+\* sceneDidEnterBackground -> enteredBackground (:769-782).
 Background == scene = "inactive" /\ "leave" \in DanActs /\ Set([Now EXCEPT !.scene = "background", !.closeT = TRUE])
 
 \* iOS suspends the app once its background task is over: after closePage
 \* (its expiry handler closes the page first).
 Suspend == scene = "background" /\ ~web /\ Set([Now EXCEPT !.scene = "suspended"])
 
-\* sceneWillEnterForeground -> enteringForeground (:775-778).
+\* sceneWillEnterForeground -> enteringForeground (:784-787).
 Foreground == scene \in {"background", "suspended"} /\ Set([Now EXCEPT !.scene = "inactive", !.closeT = FALSE])
 
 \* A touch or a key in the app (ViewerWindow.sendEvent, App.swift:37-60). A

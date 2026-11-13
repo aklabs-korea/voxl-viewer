@@ -85,18 +85,19 @@ drop|PhoneScreen|screen-drop|{}|
 down|PhoneScreen|screen-down|{}|
 behind|PhoneScreen|screen-behind|{}|
 sharp|PhoneScreen|screen-sharp|{}|
-full|PhoneScreen|screen-full|{}|CoverTellsTruth ComesBack
-fullgone|PhoneScreen|screen-fullgone|{}|CoverTellsTruth
+full|PhoneScreen|screen-full|{}|ComesBack
+fullgone|PhoneScreen|screen-fullgone|{}|
 silent|PhoneScreen|screen-silent|{}|CoverTellsTruth ComesBack
 typing|PhoneKeys|keys-typing|{}|
-esc|PhoneKeys|keys-esc|{}|NoExtraModifier
+esc|PhoneKeys|keys-esc|{}|
 pointer|PhoneKeys|keys-pointer|{}|NoExtraModifier
 hold|PhoneKeys|keys-hold|{}|
 leave|PhoneKeys|keys-leave|{}|
-loading|PhoneKeys|keys-loading|{}|NoMissingModifier BarShowsArmed
+loading|PhoneKeys|keys-loading|{}|
 reload|PhoneKeys|keys-reload|{}|
 loss|PhoneKeys|keys-loss|{}|
-tcp|PhoneKeys|keys-tcp|{}|'
+tcp|PhoneKeys|keys-tcp|{}|
+fresh|PhoneKeys|keys-fresh|{}|NoExtraModifier'
 GUARDS='no-ResignMutes|PhoneScreen|screen-sound|{"ResignMutes"}|
 no-ResignMutes-TickMutes|PhoneScreen|screen-sound|{"ResignMutes","TickMutes"}|QuietAway
 no-TickMutes|PhoneScreen|screen-sound|{"TickMutes"}|QuietAway
@@ -108,22 +109,31 @@ no-FreshSuspend-CommitAudio-TickMutes|PhoneScreen|screen-behind|{"FreshSuspend",
 no-CommitAudio|PhoneScreen|screen-sound|{"CommitAudio"}|
 no-PictureHides|PhoneScreen|screen-sound|{"PictureHides"}|CoverTellsTruth ComesBack
 no-HelloHides|PhoneScreen|screen-fullgone|{"HelloHides"}|CoverTellsTruth ComesBack
-no-WideWaits|PhoneScreen|screen-sharp|{"WideWaits"}|CoverTellsTruth
+no-HelloSharp|PhoneScreen|screen-fullgone|{"HelloSharp"}|CoverTellsTruth
+no-WideWaits|PhoneScreen|screen-sharp|{"WideWaits"}|
+no-WideWaits-HelloSharp|PhoneScreen|screen-sharp|{"WideWaits","HelloSharp"}|CoverTellsTruth
 no-WatchHello|PhoneScreen|screen-drop|{"WatchHello"}|ComesBack
 no-CommitClearsFailing|PhoneScreen|screen-slow|{"CommitClearsFailing"}|CoverTellsTruth
 no-CoverAction|PhoneScreen|screen-slow|{"CoverAction"}|
 no-CoverAction-CommitClearsFailing|PhoneScreen|screen-full|{"CoverAction","CommitClearsFailing"}|NeverSwitchesByItself CoverTellsTruth ComesBack
 no-Blur|PhoneKeys|keys-leave|{"Blur"}|NothingStuck NoExtraModifier
 no-Hidden|PhoneKeys|keys-leave|{"Hidden"}|
-no-Hidden-Bye|PhoneKeys|keys-reload|{"Hidden","Bye"}|NothingStuck
+no-Hidden-Bye|PhoneKeys|keys-reload|{"Hidden","Bye"}|
+no-Hidden-Bye-HelloRelease|PhoneKeys|keys-reload|{"Hidden","Bye","HelloRelease"}|NothingStuck
 no-Bye|PhoneKeys|keys-loss|{"Bye"}|
-no-Bye-ReconnectRelease|PhoneKeys|keys-loss|{"Bye","ReconnectRelease"}|NothingStuck NoExtraModifier
-no-ReconnectRelease|PhoneKeys|keys-tcp|{"ReconnectRelease"}|NothingStuck NoExtraModifier
+no-Bye-ReconnectRelease|PhoneKeys|keys-loss|{"Bye","ReconnectRelease"}|NoExtraModifier
+no-Bye-ReconnectRelease-HelloRelease|PhoneKeys|keys-loss|{"Bye","ReconnectRelease","HelloRelease"}|NothingStuck NoExtraModifier
+no-ReconnectRelease|PhoneKeys|keys-tcp|{"ReconnectRelease"}|NoExtraModifier
+no-ReconnectRelease-HelloRelease|PhoneKeys|keys-tcp|{"ReconnectRelease","HelloRelease"}|NothingStuck NoExtraModifier
 no-Disarm|PhoneKeys|keys-leave|{"Disarm"}|NoExtraModifier BarShowsArmed
 no-BarClear|PhoneKeys|keys-leave|{"BarClear"}|
-no-BarClear-ArmedMsg|PhoneKeys|keys-leave|{"BarClear","ArmedMsg"}|NoMissingModifier BarShowsArmed
+no-BarClear-ArmedMsg|PhoneKeys|keys-leave|{"BarClear","ArmedMsg"}|NoExtraModifier NoMissingModifier BarShowsArmed
 no-ArmedMsg|PhoneKeys|keys-typing|{"ArmedMsg"}|BarShowsArmed
-no-LoadClearsBar|PhoneKeys|keys-reload|{"LoadClearsBar"}|NoMissingModifier BarShowsArmed
+no-LoadClearsBar|PhoneKeys|keys-reload|{"LoadClearsBar"}|
+no-LoadClearsBar-Resend|PhoneKeys|keys-reload|{"LoadClearsBar","Resend"}|NoMissingModifier BarShowsArmed
+no-Resend|PhoneKeys|keys-loading|{"Resend"}|NoMissingModifier BarShowsArmed
+no-TapLetGo|PhoneKeys|keys-esc|{"TapLetGo"}|NoExtraModifier
+no-HelloRelease|PhoneKeys|keys-fresh|{"HelloRelease"}|NothingStuck NoExtraModifier
 no-KeyUpLift|PhoneKeys|keys-typing|{"KeyUpLift"}|NothingStuck NoExtraModifier
 no-ClickLift|PhoneKeys|keys-typing|{"ClickLift"}|NothingStuck NoExtraModifier
 no-HoldPress|PhoneKeys|keys-typing|{"HoldPress"}|NoMissingModifier
