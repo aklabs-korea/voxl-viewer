@@ -52,7 +52,7 @@ const app = (v: Vars) => {
   const where = v.scene === "active" ? `the app on screen ${v.row}` : v.scene === "inactive" ? "the app behind" : "the app in the background";
   const page = v.doc === "none" ? "page closed" : v.doc === "blank" ? "loading"
     : v.sock !== "open" ? "reconnecting" : v.hello ? "connected" : "connected, hello not in yet";
-  const keys = v.doc === "page" && !v.focused ? " (keys go nowhere until the picture)" : "";
+  const keys = v.doc === "page" && !v.focused ? " (keys go nowhere until the picture or the keyboard button)" : "";
   return `${where}, ${page}${keys}`;
 };
 
@@ -97,6 +97,7 @@ export const step = (action: string, from: Vars, to: Vars) => {
     case "SocketOpen": return "the page connects";
     case "Hello": return "voxl's hello reaches the app: release-all, the bar's ⌘ sent again";
     case "Picture": return "the first frame: the view takes the keys";
+    case "KbButton": return "Dan taps the bar's keyboard button: the view takes the keys";
     case "Done": return null;
     default: return action;
   }

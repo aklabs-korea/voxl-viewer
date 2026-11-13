@@ -19,9 +19,9 @@
 (* once ("pad": a hold on the pad; "picHold": a still hold on the picture  *)
 (* in Trackpad; "picPan": a drag on the picture in Direct; "pointer": an   *)
 (* iPad trackpad or mouse dragging on the picture), the Trackpad/Direct    *)
-(* switch, the key bar's ⌘ and its Esc. ⌘ stands for all four bar          *)
-(* modifiers: Page.input treats them alike. Every drag shares Pointer's    *)
-(* one dragging flag.                                                      *)
+(* switch, the key bar's ⌘, its Esc and its keyboard button. ⌘ stands for  *)
+(* all four bar modifiers: Page.input treats them alike. Every drag shares *)
+(* Pointer's one dragging flag.                                            *)
 (*                                                                         *)
 (* Steps. One step is one main-thread job of the app or the page: a        *)
 (* script call the app makes runs in the document the view holds at that   *)
@@ -80,8 +80,9 @@ VARIABLES
   bar,       \* KeyBar.armed: the lit modifiers (A KeyBar.swift:11, 170-180)
   doc,       \* the web view's document: "none" (closePage), "blank" (loading), "page" (voxl's page)
   focused,   \* the web view is the first responder, so Dan's keys reach the page's #kbd: from
-             \* focusKeys at the page's first picture (A ViewerController.swift:649-654, 698-704);
-             \* a web view load() makes or reuses has none until then (:357, 329-351)
+             \* focusKeys (A ViewerController.swift:698-704), at the page's first picture (:649-654)
+             \* or the key bar's keyboard button (:706-709); a web view load() makes has none
+             \* (:357, 329-351), one it loads again (no commit since) keeps what it had
   sock,      \* the worker's socket: "closed" (it reconnects in 1 s) or "open"
   hello,     \* the app's hello: voxl's hello on this connection reached it (A ViewerController.swift:39,
              \* 612; cleared by load() :362 and a close :665)
@@ -250,9 +251,11 @@ NewDoc(r, d) == [r EXCEPT !.doc = d, !.sock = "closed", !.armed = {}, !.hold = N
                           !.down = {}]
 \* load() (:353-374): a fresh web view if the page committed (or none, :357),
 \* loading; hello false (:362); reconnecting false (:367); the bar's lights
-\* off (:368). The view has no keyboard focus: a fresh one never had it, and
-\* one kept (no commit since its load) has had no picture.
-Load(r) == [NewDoc(Teardown(r), "blank") EXCEPT !.reconnecting = FALSE, !.hello = FALSE, !.focused = FALSE,
+\* off (:368). A fresh view has no keyboard focus; one kept (still loading,
+\* no commit since its load) stays the first responder if the keyboard
+\* button made it one (it has had no picture).
+Load(r) == [NewDoc(Teardown(r), "blank") EXCEPT !.reconnecting = FALSE, !.hello = FALSE,
+                                                !.focused = (r.doc = "blank" /\ r.focused),
                                                 !.bar = IF Has("LoadClearsBar") THEN {} ELSE @]
 
 \* The app's up (send "up", Pointer.swift:256-262) into the page.
@@ -304,8 +307,9 @@ Want == IF fresh THEN bar ELSE {}
 Free1 == Overlap \/ (hw = {} /\ fingers = {})
 
 \* Dan presses a letter. With the app in front it reaches the page's #kbd
-\* once the view has the keyboard focus (focusKeys at the page's first
-\* picture, :649-654, 698-704); before that it goes nowhere.
+\* once the view has the keyboard focus (focusKeys, :698-704, at the page's
+\* first picture or from the bar's keyboard button); before that it goes
+\* nowhere.
 KeyDown(k) ==
   /\ k \in Letters /\ k \notin hw /\ used.press[k] < Presses /\ scene = "active" /\ Free1
   /\ LET r0 == [Now EXCEPT !.hw = @ \cup {k}, !.used.press[k] = @ + 1]
@@ -363,6 +367,19 @@ BarTap ==
   /\ LET r0 == [Now EXCEPT !.used.tap = @ + 1]
          r1 == IF doc = "page" THEN VoxlTap(r0, Want) ELSE r0
      IN Set([r1 EXCEPT !.bar = {}, !.fresh = FALSE])
+
+\* Dan taps the bar's keyboard button, "Show or hide the keyboard" (A
+\* KeyBar.swift:94 -> onKeyboard, ViewerController.swift:149 -> toggleKeyboard,
+\* :706-709 -> focusKeys, :698-704). The bar is beside the cover, not under it
+\* (cover :204, bar :215), so he can tap it while a page loads. focusKeys needs
+\* only a web view (guard let web): the view becomes the first responder, and
+\* voxlKeyboard focuses #kbd if voxl's page is in the view (A Page.swift:54-61);
+\* a page still loading focuses #kbd itself when it starts (R keyboard.ts:287),
+\* so Dan's keys reach it from its commit. Tapped with the focus already there,
+\* it only shows or hides the iPhone keyboard (not modeled).
+KbButton ==
+  /\ scene = "active" /\ doc # "none" /\ ~focused
+  /\ Set([Now EXCEPT !.focused = TRUE])
 
 -----------------------------------------------------------------------------
 (* The world: the app's scene, screens, reloads, the socket *)
@@ -474,7 +491,7 @@ Done == Settled /\ UNCHANGED vars
 
 DanStep == \/ \E k \in Letters : KeyDown(k) \/ KeyUp(k)
            \/ Click \/ \E g \in DragKinds : DragStart(g) \/ DragEnd(g)
-           \/ ModeFlip \/ BarToggle \/ BarTap
+           \/ ModeFlip \/ BarToggle \/ BarTap \/ KbButton
 World   == \/ Resign \/ Activate \/ Background \/ ClosePage \/ Foreground \/ Switch \/ Reload
            \/ LossLoud \/ LossSilent \/ \E s \in Screens : TcpGivesUp(s)
 

@@ -93,7 +93,7 @@ esc|PhoneKeys|keys-esc|{}|
 pointer|PhoneKeys|keys-pointer|{}|NoExtraModifier
 hold|PhoneKeys|keys-hold|{}|
 leave|PhoneKeys|keys-leave|{}|
-loading|PhoneKeys|keys-loading|{}|
+loading|PhoneKeys|keys-loading|{}|NoMissingModifier
 reload|PhoneKeys|keys-reload|{}|
 loss|PhoneKeys|keys-loss|{}|
 tcp|PhoneKeys|keys-tcp|{}|
@@ -129,7 +129,7 @@ no-Disarm|PhoneKeys|keys-leave|{"Disarm"}|NoExtraModifier BarShowsArmed
 no-BarClear|PhoneKeys|keys-leave|{"BarClear"}|
 no-BarClear-ArmedMsg|PhoneKeys|keys-leave|{"BarClear","ArmedMsg"}|NoExtraModifier NoMissingModifier BarShowsArmed
 no-ArmedMsg|PhoneKeys|keys-typing|{"ArmedMsg"}|BarShowsArmed
-no-LoadClearsBar|PhoneKeys|keys-reload|{"LoadClearsBar"}|
+no-LoadClearsBar|PhoneKeys|keys-reload|{"LoadClearsBar"}|NoMissingModifier
 no-LoadClearsBar-Resend|PhoneKeys|keys-reload|{"LoadClearsBar","Resend"}|NoMissingModifier BarShowsArmed
 no-Resend|PhoneKeys|keys-loading|{"Resend"}|NoMissingModifier BarShowsArmed
 no-TapLetGo|PhoneKeys|keys-esc|{"TapLetGo"}|NoExtraModifier

@@ -14,9 +14,9 @@ Two TLA+ models of the iPhone/iPad app in `ios/Voxl` and the parts of voxl it dr
   requests: the app's `cs,0.8` from a screen's Sharp URL, another viewer asking for Full). Promises 1 and 2.
 - `ios/model/PhoneKeys.tla`: Dan's letters, clicks, held drags (fingers on the pad or the picture, an iPad
   trackpad; up to one of each at once, sharing Pointer's one `dragging` flag), the Trackpad/Direct switch and the
-  key bar's ⌘ and Esc, through `Page.input`, voxl's `keyboard.ts` and `pointer.ts`, the worker's socket, voxl's
-  hello on each connection (the app's release-all and re-arm) and each screen's voxl injector, with the app
-  leaving, switching, reloading, losing its socket (also silently: voxl keeps it open) and reconnecting.
+  key bar's ⌘, Esc and keyboard button, through `Page.input`, voxl's `keyboard.ts` and `pointer.ts`, the worker's
+  socket, voxl's hello on each connection (the app's release-all and re-arm) and each screen's voxl injector, with
+  the app leaving, switching, reloading, losing its socket (also silently: voxl keeps it open) and reconnecting.
   Promises 3 and 4.
 
 TLA+ with TLC, because each promise is about the order of events across the app's main thread, its timers,
@@ -92,7 +92,7 @@ Every config starts PhoneKeys with the app in front on screen 1, connected; Phon
 | `keys-pointer` | the bar's ⌘, a letter, a click, up to two drags at once, Trackpad/Direct meanwhile | NoExtraModifier |
 | `keys-hold` | the bar's ⌘, still holds on the picture, Trackpad/Direct meanwhile | nothing |
 | `keys-leave` | a held letter, click or drag, with or without ⌘ (tapped while the page shows); leave, back, switch | nothing |
-| `keys-loading` | Dan switches screens and taps ⌘ while the new one loads | nothing |
+| `keys-loading` | Dan switches screens and taps ⌘ (and the keyboard button) while the new one loads | NoMissingModifier (see 5) |
 | `keys-reload` | ⌘ tapped, then a load() without release() (retry, hello watch, web process, Reconnect, Ask for Sharp) | nothing |
 | `keys-loss` | a held letter, click or drag; the socket drops and voxl sees it | nothing |
 | `keys-tcp` | as loss, but voxl doesn't see the drop until TCP gives up | nothing |
@@ -119,6 +119,17 @@ The breaks, in the code's words (A = `ios/Voxl`, R = voxl 0.3.4):
    loads a fresh page (Reconnect, or the hello watch 10 s after the close); its socket opens; Dan taps the pad
    before the app has handled the hello: the Mac gets ⌘-click; the hello then lets go of everything. A window of
    milliseconds (two hops between the page and the app after voxl's first message).
+5. A key typed in the moment a new page connects misses a ⌘ tapped while it loaded, after the bar's keyboard
+   button (`NoMissingModifier` in `keys-loading`). The keyboard button runs `focusKeys` any time there is a web
+   view (A KeyBar.swift:94, ViewerController.swift:149, 706-709, 698-704), and the bar is beside the cover, not
+   under it (:204, 215), so the new view can have the keys before its first frame (voxl's page focuses #kbd itself
+   when it starts, R keyboard.ts:287). The page is armed with a ⌘ tapped while it loaded only by the hello's
+   `keyBar.resend` (A ViewerController.swift:648). Path: Dan switches screens; while the new one loads he taps ⌘
+   (lit; the loading view has no `voxlArm`) and the keyboard button (before or after the commit); voxl's page
+   commits; its socket opens; Dan presses a before the app has handled voxl's hello: the Mac gets a without ⌘;
+   the hello then arms the page and ⌘ stays lit for the next key. The same window of milliseconds as 4 (between
+   the new socket opening and the app handling voxl's first message), and only after the keyboard button: without
+   it, keys reach a new page from its first frame, which comes after the hello.
 
 ce88951 fixed the earlier breaks in `screen-fullgone` and `screen-full` (a Full cover left after a Sharp hello),
 `keys-esc` (⌘ held for a letter landing on the bar's Esc) and `keys-loading` (⌘ tapped while a screen loads never
@@ -162,7 +173,7 @@ pair row shows it:
 | BarClear | `release()` clears the bar (ViewerController.swift:714) | keys-leave | nothing: the page's 'armed' message clears it |
 | BarClear, ArmedMsg | and the 'armed' message (Page.swift:87; ViewerController.swift:680-681) | keys-leave | NoExtraModifier, NoMissingModifier, BarShowsArmed |
 | ArmedMsg | the page's 'armed' [] when it disarms | keys-typing | BarShowsArmed |
-| LoadClearsBar | `load()` clears the bar (ViewerController.swift:368) | keys-reload | nothing: the hello arms the new page with the lit ⌘ |
+| LoadClearsBar | `load()` clears the bar (ViewerController.swift:368) | keys-reload | NoMissingModifier: ⌘ stays lit through the reload, so break 5 shows here (a key after the keyboard button, before the hello); the hello arms the new page with the lit ⌘, so BarShowsArmed holds |
 | LoadClearsBar, Resend | both | keys-reload | NoMissingModifier, BarShowsArmed |
 | Resend | the hello sends the lit modifiers again (`keyBar.resend`, ViewerController.swift:648; KeyBar.swift:164-167) | keys-loading | NoMissingModifier, BarShowsArmed |
 | TapLetGo | `voxlTap` lets go of holding first (Page.swift:90) | keys-esc | NoExtraModifier |
@@ -178,11 +189,11 @@ pair row shows it:
 | ModeUp, HoldEndUp | both | keys-hold | NothingStuck |
 
 (A config's baseline break shows in its rows too: `screen-full` ComesBack, `keys-pointer` and `keys-fresh`
-NoExtraModifier.)
+NoExtraModifier, `keys-loading` NoMissingModifier.)
 
-The baseline held on 20 reruns of `check.sh` on 2026-11-13 at the sync below (04f677a; the PC, Git Bash, four
-separate `check.sh` processes at a time, 13.5 minutes in all, after `check.sh --record`): exit 0 each time and
-byte-identical output.
+The baseline held on 20 reruns of `check.sh` on 2026-11-13 at the sync below (04f677a, with the keyboard button's
+`KbButton`; the PC, Git Bash, four separate `check.sh` processes at a time, 15 minutes in all): exit 0 each time
+and byte-identical output.
 
 ## Timing contract
 
@@ -197,11 +208,12 @@ describes the code:
 - The timers of one try keep their order: `waitLater` (3 s) before `helloLater` (10 s from `load()` or from a
   close); `helloLater` from `load()` and `waited`'s 7 s retry fire together at about 10 s.
 - Slow, any time: voxl's answer to a load when `SlowAnswer` (a poor link), a load failing, the first frames after
-  a hello (10-30 s around a Mac wake), Dan, iOS and the network. Dan's keys reach a new web view's page only from
-  its first frame (`focusKeys` at the picture, A ViewerController.swift:654); his taps on the pad reach it as soon
-  as it commits.
+  a hello (10-30 s around a Mac wake), Dan, iOS and the network. Dan's keys reach a new web view's page from its
+  first frame (`focusKeys` at the picture, A ViewerController.swift:654), or from its commit once he taps the bar's
+  keyboard button (`focusKeys` from `toggleKeyboard`, :706-709, any time there is a web view; voxl's page focuses
+  #kbd when it starts, R keyboard.ts:287); his taps on the pad reach it as soon as it commits.
 - Dan's actions in PhoneKeys can interleave with the quick steps (Dan can let go during a reconnect, or tap the
-  pad between a new socket opening and voxl's hello).
+  pad or type between a new socket opening and voxl's hello).
 
 ## Scope and assumptions
 
@@ -231,7 +243,7 @@ describes the code:
   own voxl (silent then switch: `NothingStuck`, path KeyDown, LossSilent, Switch, Commit, SocketOpen, Hello).
   (b) ⌘ tapped while a page loads misses a pad tap made between the new socket opening and the hello, and stays
   lit for the next key (`keys-fresh` with `ArmLoading`: `NoMissingModifier`, path Reload, BarToggle, Commit,
-  SocketOpen, Click).
+  SocketOpen, Click). Its key version, after the keyboard button, is break 5.
 - Not modeled: voxl's password (the sheet waits for Dan by design; it pauses the hello watch and re-arms it after
   a credential, A ViewerController.swift:538-557), the Machines screen beyond a reload, 5xx answers, read-only
   voxl, resize, downloads, the clipboard, the cursor, the idle timer, old web views after `newWebView` (assumed
@@ -262,6 +274,7 @@ describes the code:
 | `Release`, `Load`, `Teardown`, `Switch`, `Reload`, `Resign`, `Activate`, `Background`, `ClosePage` | A ViewerController.swift:300-309, 329-389, 434-441, 531-535, 680-681, 712-715, 750-782; R main.ts:118-121 |
 | `DragStart`, `DragEnd`, `EndDrag`, `EndAll`, `Click`, `ModeFlip` | A Pointer.swift:18-26, 44, 92-111, 164-214, 256-268; ViewerController.swift:137-140 |
 | `BarToggle`, `BarTap` | A KeyBar.swift:146-161, 170-180 |
+| `KbButton`, `Load`'s kept focus | A KeyBar.swift:94; ViewerController.swift:149, 204, 215, 353-374, 698-709; Page.swift:54-61; R keyboard.ts:287 |
 | `LossLoud`, `LossSilent`, `TcpGivesUp`, `Commit`, `SocketOpen` | A ViewerController.swift:520-529, 661-671; R worker.ts:104-117; server.rs:258-291 |
 | `Hello`, `Picture`, `KeyDown`'s and `KeyUp`'s focus | A ViewerController.swift:611-654, 698-704, 750-759; KeyBar.swift:163-167; Page.swift:13-15, 32-41; R server.rs:214-220, worker.ts:155-164, keyboard.ts:141-145, 285, main.ts:108-121 |
 
