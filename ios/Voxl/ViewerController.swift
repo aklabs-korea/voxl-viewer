@@ -636,7 +636,12 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
             } else if picture {
                 cover.hide()
+            } else if coverAction == .sharp {
+                // Sharp again before a frame: the cover goes back to saying it connects.
+                showCover(label)
             }
+            // A modifier tapped on the bar while this page loaded reaches it now.
+            keyBar.resend()
         case "picture":
             picture = true
             failing = false

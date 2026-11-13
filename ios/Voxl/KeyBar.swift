@@ -160,6 +160,12 @@ final class KeyBar: UIView {
         run("window.voxlArm && voxlArm([\(a.map { "'\($0)'" }.joined(separator: ","))])")
     }
 
+    /// The armed modifiers again, for a page that connected after they were tapped.
+    func resend() {
+        guard !armed.isEmpty else { return }
+        run("window.voxlArm && voxlArm([\(armed.map { "'\($0)'" }.joined(separator: ","))])")
+    }
+
     /// Lit while armed; the page says when the next key or click has used them.
     func setArmed(_ a: [String]) {
         armed = a
