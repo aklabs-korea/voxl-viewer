@@ -151,6 +151,7 @@ final class KeyBar: UIView {
     private func chord(_ mods: [String], _ key: String, _ code: String) {
         let list = mods.map { "'\($0)'" }.joined(separator: ",")
         run("window.voxlChord && voxlChord([\(list)], '\(js(key))', '\(code)')")
+        setArmed([])
     }
 
     private func toggle(_ code: String) {
@@ -182,6 +183,7 @@ final class KeyBar: UIView {
     func paste(_ text: String) {
         let quoted = (try? String(data: JSONSerialization.data(withJSONObject: [text]), encoding: .utf8)) ?? "[\"\"]"
         run("window.voxlPaste && voxlPaste(\(quoted)[0])")
+        setArmed([])
     }
 
     override func paste(itemProviders: [NSItemProvider]) {
