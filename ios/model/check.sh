@@ -93,10 +93,11 @@ esc|PhoneKeys|keys-esc|{}|
 pointer|PhoneKeys|keys-pointer|{}|NoExtraModifier
 hold|PhoneKeys|keys-hold|{}|
 leave|PhoneKeys|keys-leave|{}|
-loading|PhoneKeys|keys-loading|{}|NoMissingModifier
+loading|PhoneKeys|keys-loading|{}|
+kbbutton|PhoneKeys|keys-kbbutton|{}|NoMissingModifier
 reload|PhoneKeys|keys-reload|{}|
 loss|PhoneKeys|keys-loss|{}|
-tcp|PhoneKeys|keys-tcp|{}|
+tcp|PhoneKeys|keys-tcp|{}|NoExtraModifier
 fresh|PhoneKeys|keys-fresh|{}|NoExtraModifier'
 GUARDS='no-ResignMutes|PhoneScreen|screen-sound|{"ResignMutes"}|
 no-ResignMutes-TickMutes|PhoneScreen|screen-sound|{"ResignMutes","TickMutes"}|QuietAway
@@ -119,12 +120,10 @@ no-CoverAction-CommitClearsFailing|PhoneScreen|screen-full|{"CoverAction","Commi
 no-Blur|PhoneKeys|keys-leave|{"Blur"}|NothingStuck NoExtraModifier
 no-Hidden|PhoneKeys|keys-leave|{"Hidden"}|
 no-Hidden-Bye|PhoneKeys|keys-reload|{"Hidden","Bye"}|
-no-Hidden-Bye-HelloRelease|PhoneKeys|keys-reload|{"Hidden","Bye","HelloRelease"}|NothingStuck
-no-Bye|PhoneKeys|keys-loss|{"Bye"}|
-no-Bye-ReconnectRelease|PhoneKeys|keys-loss|{"Bye","ReconnectRelease"}|NoExtraModifier
-no-Bye-ReconnectRelease-HelloRelease|PhoneKeys|keys-loss|{"Bye","ReconnectRelease","HelloRelease"}|NothingStuck NoExtraModifier
-no-ReconnectRelease|PhoneKeys|keys-tcp|{"ReconnectRelease"}|NoExtraModifier
-no-ReconnectRelease-HelloRelease|PhoneKeys|keys-tcp|{"ReconnectRelease","HelloRelease"}|NothingStuck NoExtraModifier
+no-Hidden-Bye-OpenRelease|PhoneKeys|keys-reload|{"Hidden","Bye","OpenRelease"}|NothingStuck
+no-Bye|PhoneKeys|keys-loss|{"Bye"}|NoExtraModifier
+no-Bye-OpenRelease|PhoneKeys|keys-loss|{"Bye","OpenRelease"}|NothingStuck NoExtraModifier
+no-OpenRelease|PhoneKeys|keys-tcp|{"OpenRelease"}|NothingStuck NoExtraModifier
 no-Disarm|PhoneKeys|keys-leave|{"Disarm"}|NoExtraModifier BarShowsArmed
 no-BarClear|PhoneKeys|keys-leave|{"BarClear"}|
 no-BarClear-ArmedMsg|PhoneKeys|keys-leave|{"BarClear","ArmedMsg"}|NoExtraModifier NoMissingModifier BarShowsArmed
@@ -133,7 +132,9 @@ no-LoadClearsBar|PhoneKeys|keys-reload|{"LoadClearsBar"}|NoMissingModifier
 no-LoadClearsBar-Resend|PhoneKeys|keys-reload|{"LoadClearsBar","Resend"}|NoMissingModifier BarShowsArmed
 no-Resend|PhoneKeys|keys-loading|{"Resend"}|NoMissingModifier BarShowsArmed
 no-TapLetGo|PhoneKeys|keys-esc|{"TapLetGo"}|NoExtraModifier
-no-HelloRelease|PhoneKeys|keys-fresh|{"HelloRelease"}|NothingStuck NoExtraModifier
+no-ChordDisarm|PhoneKeys|keys-esc|{"ChordDisarm"}|NoExtraModifier BarShowsArmed
+no-ChordBarClear|PhoneKeys|keys-esc|{"ChordBarClear"}|
+no-ChordBarClear-loading|PhoneKeys|keys-loading|{"ChordBarClear"}|NoExtraModifier
 no-KeyUpLift|PhoneKeys|keys-typing|{"KeyUpLift"}|NothingStuck NoExtraModifier
 no-ClickLift|PhoneKeys|keys-typing|{"ClickLift"}|NothingStuck NoExtraModifier
 no-HoldPress|PhoneKeys|keys-typing|{"HoldPress"}|NoMissingModifier

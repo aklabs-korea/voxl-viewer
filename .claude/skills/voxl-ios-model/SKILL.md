@@ -14,10 +14,10 @@ Two TLA+ models of the iPhone/iPad app in `ios/Voxl` and the parts of voxl it dr
   requests: the app's `cs,0.8` from a screen's Sharp URL, another viewer asking for Full). Promises 1 and 2.
 - `ios/model/PhoneKeys.tla`: Dan's letters, clicks, held drags (fingers on the pad or the picture, an iPad
   trackpad; up to one of each at once, sharing Pointer's one `dragging` flag), the Trackpad/Direct switch and the
-  key bar's ⌘, Esc and keyboard button, through `Page.input`, voxl's `keyboard.ts` and `pointer.ts`, the worker's
-  socket, voxl's hello on each connection (the app's release-all and re-arm) and each screen's voxl injector, with
-  the app leaving, switching, reloading, losing its socket (also silently: voxl keeps it open) and reconnecting.
-  Promises 3 and 4.
+  key bar's ⌘, Esc, Mac keys and keyboard button, through `Page.input`, voxl's `keyboard.ts` and `pointer.ts`, the
+  worker's socket, the app's release-all when it hears a socket open, voxl's hello (the re-arm) and each screen's
+  voxl injector, with the app leaving, switching, reloading, losing its socket (also silently: voxl keeps it open)
+  and reconnecting. Promises 3 and 4.
 
 TLA+ with TLC, because each promise is about the order of events across the app's main thread, its timers,
 WebKit, the page, the worker's socket and voxl, which tests on the phone don't reach.
@@ -35,9 +35,10 @@ WebKit, the page, the worker's socket and voxl, which tests on the phone don't r
 | `NoExtraModifier`, `NoMissingModifier` (PhoneKeys) | 4 "Bar modifiers hit the next key only": a key or click reaches the Mac with the bar's modifiers if it is the first since Dan changed the bar, and with none otherwise. | invariants |
 | `BarShowsArmed` (PhoneKeys) | 4, "... and the bar shows what the page has armed". | invariant, once settled |
 
-"Once settled" means no quick step is left: the page committing or connecting, voxl's hello on a new
-connection, the worker's 1 s reconnect, voxl's capture rebuild (within 1 s), the app's 1 s tick when it has work
-(and, unless `SlowAnswer`, voxl's answer to a load). That is what Dan sees for more than a moment.
+"Once settled" means no quick step is left: the page committing or connecting, the app hearing that its socket
+opened, voxl's hello on a new connection, the worker's 1 s reconnect, voxl's capture rebuild (within 1 s), the
+app's 1 s tick when it has work (and, unless `SlowAnswer`, voxl's answer to a load). That is what Dan sees for
+more than a moment.
 
 ## Run it
 
@@ -88,21 +89,25 @@ Every config starts PhoneKeys with the app in front on screen 1, connected; Phon
 | `screen-full` | another viewer may keep Full; no Sharp URL until Dan asks; slow answers | ComesBack (by design, see 2) |
 | `screen-silent` | the open socket goes silent with no close | CoverTellsTruth, ComesBack (known, see 1) |
 | `keys-typing` | the bar's ⌘, two letters that may overlap (hardware keyboard), a click | nothing |
-| `keys-esc` | the bar's ⌘, a held letter, the bar's Esc meanwhile | nothing |
+| `keys-esc` | the bar's ⌘, a held letter, the bar's Esc or one of its Mac keys (a chord) meanwhile | nothing |
 | `keys-pointer` | the bar's ⌘, a letter, a click, up to two drags at once, Trackpad/Direct meanwhile | NoExtraModifier |
 | `keys-hold` | the bar's ⌘, still holds on the picture, Trackpad/Direct meanwhile | nothing |
 | `keys-leave` | a held letter, click or drag, with or without ⌘ (tapped while the page shows); leave, back, switch | nothing |
-| `keys-loading` | Dan switches screens and taps ⌘ (and the keyboard button) while the new one loads | NoMissingModifier (see 5) |
+| `keys-loading` | Dan switches screens and taps ⌘ (and may pick a Mac key) while the new one loads; no keyboard button | nothing |
+| `keys-kbbutton` | Dan switches screens and taps ⌘ and the keyboard button while the new one loads | NoMissingModifier (see 5) |
 | `keys-reload` | ⌘ tapped, then a load() without release() (retry, hello watch, web process, Reconnect, Ask for Sharp) | nothing |
 | `keys-loss` | a held letter, click or drag; the socket drops and voxl sees it | nothing |
-| `keys-tcp` | as loss, but voxl doesn't see the drop until TCP gives up | nothing |
-| `keys-fresh` | a held letter, click or drag, with or without ⌘ (tapped while the page shows); the socket goes silent (voxl keeps it open) and a fresh page loads (a load() without release()) before the reconnect | NoExtraModifier (see 4) |
+| `keys-tcp` | as loss, but voxl doesn't see the drop until TCP gives up | NoExtraModifier (see 4) |
+| `keys-fresh` | a held letter, click or drag, with or without ⌘ (tapped while the page shows); the socket goes silent (voxl keeps it open), and the worker reconnects or a fresh page loads (a load() without release()) | NoExtraModifier (see 4) |
+
+`KbLoading` (the bar's keyboard button before the picture) is on in every keys config but `keys-loading`, so
+that one checks the `Resend` fix alone and break 5 has its own config.
 
 The breaks, in the code's words (A = `ios/Voxl`, R = voxl 0.3.4):
 
 1. Known, expected: a silent socket freezes the picture (`screen-silent`). The picture plays; the open socket goes
    silent with no close (the Mac lost power, the path died): no cover, and nothing reloads, since the hello watch
-   is armed only by `load()` and a close (A ViewerController.swift:371-372, 664-667). A heartbeat can't come from
+   is armed only by `load()` and a close (A ViewerController.swift:369, 667-672). A heartbeat can't come from
    the page: voxl's worker answers voxl's pings itself, on its own socket (R worker.ts:145-147), so they never pass
    the page's `Worker.postMessage`. a302a7d's watchdog read them there, never heard one, and reloaded a healthy
    page every 10 s (this model showed the loop); a6a72ed removed it. Recovers when Dan touches (a send fails).
@@ -110,30 +115,48 @@ The breaks, in the code's words (A = `ios/Voxl`, R = voxl 0.3.4):
    waits for Dan (`ComesBack` in `screen-full`). With a Sharp URL every new connection takes Sharp back
    (`screen-sharp` holds).
 3. ⌘ on a key typed during a ⌘-drag (`keys-pointer`). A ⌘ armed for a click stays down until its up (`clickMods`,
-   A Page.swift:113-120), and a trusted keydown lets go only of `holding`: tap ⌘, start a drag, press a: ⌘A.
-4. A click in the moment a fresh page connects gets a ⌘ held from a silent socket (`NoExtraModifier` in
-   `keys-fresh`). voxl lets go only when a connection ends (R server.rs:287-291); the hello's release-all
-   (A ViewerController.swift:647) comes with voxl's hello, a message after the new socket opens, and a tap on the pad
-   is sent at once (Pointer.swift:256-268, Page.swift:107-121; the cover covers the picture, not the pad). Path: tap
-   ⌘, hold a (⌘ held for it); the socket goes silent (voxl keeps it, with ⌘ and a down); let go of a (lost); the app
-   loads a fresh page (Reconnect, or the hello watch 10 s after the close); its socket opens; Dan taps the pad
-   before the app has handled the hello: the Mac gets ⌘-click; the hello then lets go of everything. A window of
-   milliseconds (two hops between the page and the app after voxl's first message).
+   A Page.swift:122-129), and a trusted keydown lets go only of `holding`: tap ⌘, start a drag, press a: ⌘A.
+4. A click, or a key, in the moment a socket opens after a silent one gets a ⌘ held from it (`NoExtraModifier`
+   in `keys-tcp` and `keys-fresh`). voxl lets go only when a connection ends (R server.rs:287-291). The app lets
+   go when it hears the new socket open (a window blur, voxl's release-all: A ViewerController.swift:673-679, on
+   every open since 5e57a1f), a status that goes from the worker to the page (A Page.swift:35) to the app; the
+   page's sends go out from the worker's open (R worker.ts:97-99, 108-112). A tap on the pad is sent at once
+   (Pointer.swift:256-268, Page.swift:116-130; the cover covers the picture, not the pad), and so is a key when
+   the view has the keys. Path (`keys-tcp`): tap ⌘, hold a (⌘ held for it); the socket goes silent (voxl keeps
+   it, with ⌘ and a down); let go of a (lost); the worker reconnects 1 s later and its socket opens; Dan taps the
+   pad before the app has heard the open: the Mac gets ⌘-click; the app's blur then lets go of everything. With a
+   hardware keyboard the same path ending in a key gives ⌘a (`keys-fresh` with Presses = 2, Clicks = 0,
+   Drags = 0: BarToggle, KeyDown, LossSilent, KeyUp, SocketOpen, KeyDown): on a reconnect the view keeps the keys.
+   On a fresh page (Reconnect, or the hello watch 10 s after the close) a key needs the bar's keyboard button
+   first (BarToggle, KeyDown, LossSilent, KeyUp, Reload, KbButton, Commit, SocketOpen, KeyDown). A window of
+   milliseconds: the status's two hops, worker to page to app. Before 5e57a1f the reconnect had the same window
+   (its `release()` ran at the same message) and a fresh page's ran until voxl's hello; the model before then
+   took the open and the app hearing it as one step, so it showed only the fresh page. Rare in real use: ⌘ (or
+   another bar modifier) must be down for a held key or drag when the network drops (Wi-Fi to cellular), and
+   Dan's next tap or key must land within those milliseconds of the reconnect; the Mac then gets one ⌘-click or
+   ⌘-key.
 5. A key typed in the moment a new page connects misses a ⌘ tapped while it loaded, after the bar's keyboard
-   button (`NoMissingModifier` in `keys-loading`). The keyboard button runs `focusKeys` any time there is a web
-   view (A KeyBar.swift:94, ViewerController.swift:149, 706-709, 698-704), and the bar is beside the cover, not
-   under it (:204, 215), so the new view can have the keys before its first frame (voxl's page focuses #kbd itself
-   when it starts, R keyboard.ts:287). The page is armed with a ⌘ tapped while it loaded only by the hello's
-   `keyBar.resend` (A ViewerController.swift:648). Path: Dan switches screens; while the new one loads he taps ⌘
-   (lit; the loading view has no `voxlArm`) and the keyboard button (before or after the commit); voxl's page
-   commits; its socket opens; Dan presses a before the app has handled voxl's hello: the Mac gets a without ⌘;
-   the hello then arms the page and ⌘ stays lit for the next key. The same window of milliseconds as 4 (between
-   the new socket opening and the app handling voxl's first message), and only after the keyboard button: without
-   it, keys reach a new page from its first frame, which comes after the hello.
+   button (`NoMissingModifier` in `keys-kbbutton`). The keyboard button runs `focusKeys` any time there is a web
+   view (A KeyBar.swift:94, ViewerController.swift:147, 714-717, 706-712), and the bar is above the cover and
+   beside it (added after it, :102, 148; the cover takes the picture's frame and the bar its own strip, :202, 213
+   and Layout.swift:22-53), so the new view can have the keys before its first frame (voxl's page focuses #kbd
+   itself when it starts, R keyboard.ts:287). The page is armed with a ⌘ tapped while it loaded only by the
+   hello's `keyBar.resend` (A ViewerController.swift:651). Path: Dan switches screens; while the new one loads he
+   taps ⌘ (lit; the loading view has no `voxlArm`) and the keyboard button (before or after the commit); voxl's
+   page commits; its socket opens; Dan presses a before the app has handled voxl's hello: the Mac gets a without
+   ⌘; the hello then arms the page and ⌘ stays lit for the next key. Any load() with a modifier tapped while it
+   loads does it, not only a switch (Reconnect, a retry, the hello watch, the web process ending, the cover's
+   button: `load()` clears the bar first, :365). A window of milliseconds (between the new socket opening and the
+   app handling voxl's first message), and only after the keyboard button: without it, keys reach a new page
+   from its first frame, which comes after the hello.
 
 ce88951 fixed the earlier breaks in `screen-fullgone` and `screen-full` (a Full cover left after a Sharp hello),
 `keys-esc` (⌘ held for a letter landing on the bar's Esc) and `keys-loading` (⌘ tapped while a screen loads never
-reaching its page): the `HelloSharp`, `TapLetGo` and `Resend` rows below.
+reaching its page): the `HelloSharp`, `TapLetGo` and `Resend` rows below. 5e57a1f moved the release-all from the
+hello to the socket's open (voxl sends a hello again when it restarts its stream, which let go of a held drag) and
+dropped the reconnect's `release()`, so the bar's modifiers stay armed across a reconnect; `voxlChord` takes the
+armed modifiers and disarms, and the bar's chord and Paste clear the bar: the `OpenRelease`, `ChordDisarm` and
+`ChordBarClear` rows.
 
 `check.sh --guards` removes one guard at a time. Each must break something; if one stops breaking anything, a
 rule is missing or the guard became dead. A single that breaks nothing is backed up by another guard, and its
@@ -141,59 +164,65 @@ pair row shows it:
 
 | Guard removed (`Off`) | In the code | Config | Breaks |
 |---|---|---|---|
-| ResignMutes | `resignedActive` calls `updateAudio` (ViewerController.swift:764) | screen-sound | nothing: the 1 s tick mutes |
-| ResignMutes, TickMutes | and the tick (:795-798) | screen-sound | QuietAway |
-| TickMutes | the 1 s tick's `updateAudio` (:797) | screen-sound | QuietAway (5 idle minutes) |
-| ActiveRule | `active` in `audible` (:731) | screen-sound | QuietAway |
-| FreshMute | `muted = nil` for a new view (:350) | screen-steady | PlaysWhereIAm |
-| FreshSuspend | a new view starts suspended (:348) | screen-behind | nothing: the commit applies the rule |
-| CommitAudio, TickMutes | `didCommit`'s `updateAudio` (:528) and the tick | screen-behind | PlaysWhereIAm |
+| ResignMutes | `resignedActive` calls `updateAudio` (ViewerController.swift:772) | screen-sound | nothing: the 1 s tick mutes |
+| ResignMutes, TickMutes | and the tick (:803-806) | screen-sound | QuietAway |
+| TickMutes | the 1 s tick's `updateAudio` (:805) | screen-sound | QuietAway (5 idle minutes) |
+| ActiveRule | `active` in `audible` (:739) | screen-sound | QuietAway |
+| FreshMute | `muted = nil` for a new view (:348) | screen-steady | PlaysWhereIAm |
+| FreshSuspend | a new view starts suspended (:346) | screen-behind | nothing: the commit applies the rule |
+| CommitAudio, TickMutes | `didCommit`'s `updateAudio` (:533) and the tick | screen-behind | PlaysWhereIAm |
 | FreshSuspend, CommitAudio, TickMutes | all three | screen-behind | QuietAway, PlaysWhereIAm |
 | CommitAudio | `didCommit`'s `updateAudio` | screen-sound | nothing: the 1 s tick applies it |
-| PictureHides | `picture` hides the cover (:653) | screen-sound | CoverTellsTruth, ComesBack |
-| HelloHides | a playable hello hides it after the picture (:637-638) | screen-fullgone | CoverTellsTruth, ComesBack |
-| HelloSharp | a playable hello before a frame takes the Full cover back to the label (:639-641) | screen-fullgone | CoverTellsTruth |
-| WideWaits | a Full hello waits 2 s for the cover (`tooWideLater`, :627-636) | screen-sharp | nothing: the Sharp hello takes the Full cover back |
+| PictureHides | `picture` hides the cover (:656) | screen-sound | CoverTellsTruth, ComesBack |
+| HelloHides | a playable hello hides it after the picture (:644-645) | screen-fullgone | CoverTellsTruth, ComesBack |
+| HelloSharp | a playable hello before a frame takes the Full cover back to the label (:646-649) | screen-fullgone | CoverTellsTruth |
+| WideWaits | a Full hello waits 2 s for the cover (`tooWideLater`, :634-643) | screen-sharp | nothing: the Sharp hello takes the Full cover back |
 | WideWaits, HelloSharp | both | screen-sharp | CoverTellsTruth |
-| WatchHello | `watchHello` at load and on close (:372, :412-421, :667) | screen-drop | ComesBack (a hung reconnect) |
-| CommitClearsFailing | `didCommit` clears `failing` and shows the label (:524-527) | screen-slow | CoverTellsTruth |
-| CoverAction | the button follows `coverAction` (:449-467) | screen-slow | nothing: commit clears `failing` |
+| WatchHello | `watchHello` at load and on the first close with none pending (:369, :410-421, :672) | screen-drop | ComesBack (a hung reconnect) |
+| CommitClearsFailing | `didCommit`'s `gotAnswer` clears `failing` and shows the label (:532, 423-430) | screen-slow | CoverTellsTruth |
+| CoverAction | the button follows `coverAction` (:458-476) | screen-slow | nothing: commit clears `failing` |
 | CoverAction, CommitClearsFailing | both | screen-full | NeverSwitchesByItself, CoverTellsTruth |
-| Blur | `voxlRelease`'s blur, voxl's releaseAll (Page.swift:53, 142; R keyboard.ts:141-145, 285) | keys-leave | NothingStuck, NoExtraModifier |
+| Blur | `voxlRelease`'s blur, voxl's releaseAll (Page.swift:53, 151; R keyboard.ts:141-145, 285) | keys-leave | NothingStuck, NoExtraModifier |
 | Hidden | a hidden page sends r (R main.ts:118-121) | keys-leave | nothing: blur and the close release |
-| Hidden, Bye | and voxl's release-all when a connection ends (R server.rs:287-291) | keys-reload | nothing: the new page's hello releases |
-| Hidden, Bye, HelloRelease | all three | keys-reload | NothingStuck |
-| Bye | voxl's release-all when a connection ends | keys-loss | nothing: the reconnect's release |
-| Bye, ReconnectRelease | and `release()` on a reconnect (ViewerController.swift:668-671) | keys-loss | NoExtraModifier (a click before the hello's release) |
-| Bye, ReconnectRelease, HelloRelease | all three | keys-loss | NothingStuck, NoExtraModifier |
-| ReconnectRelease | `release()` on a reconnect | keys-tcp | NoExtraModifier (a click before the hello's release) |
-| ReconnectRelease, HelloRelease | both | keys-tcp | NothingStuck, NoExtraModifier |
-| HelloRelease | the hello's window blur, voxl's release-all on every connection (ViewerController.swift:647; R keyboard.ts:141-145, 285) | keys-fresh | NothingStuck (a key or button held through the silent socket) |
-| Disarm | `voxlRelease` disarms and drops holding, clickMods (Page.swift:142) | keys-leave | NoExtraModifier, BarShowsArmed |
-| BarClear | `release()` clears the bar (ViewerController.swift:714) | keys-leave | nothing: the page's 'armed' message clears it |
-| BarClear, ArmedMsg | and the 'armed' message (Page.swift:87; ViewerController.swift:680-681) | keys-leave | NoExtraModifier, NoMissingModifier, BarShowsArmed |
+| Hidden, Bye | and voxl's release-all when a connection ends (R server.rs:287-291) | keys-reload | nothing: the new page's open releases |
+| Hidden, Bye, OpenRelease | all three | keys-reload | NothingStuck |
+| Bye | voxl's release-all when a connection ends | keys-loss | NoExtraModifier (a click after the reconnect's socket opens, before the app hears it) |
+| Bye, OpenRelease | both | keys-loss | NothingStuck, NoExtraModifier |
+| OpenRelease | the app's window blur, voxl's release-all, when it hears any socket open (ViewerController.swift:673-679; R keyboard.ts:141-145, 285) | keys-tcp | NothingStuck (a key or button held through the silent socket); NoExtraModifier is break 4 |
+| Disarm | `voxlRelease` disarms and drops holding, clickMods (Page.swift:151) | keys-leave | NoExtraModifier, BarShowsArmed |
+| BarClear | `release()` clears the bar (ViewerController.swift:722) | keys-leave | nothing: the page's 'armed' message clears it |
+| BarClear, ArmedMsg | and the 'armed' message (Page.swift:87; ViewerController.swift:688-689) | keys-leave | NoExtraModifier, NoMissingModifier, BarShowsArmed |
 | ArmedMsg | the page's 'armed' [] when it disarms | keys-typing | BarShowsArmed |
-| LoadClearsBar | `load()` clears the bar (ViewerController.swift:368) | keys-reload | NoMissingModifier: ⌘ stays lit through the reload, so break 5 shows here (a key after the keyboard button, before the hello); the hello arms the new page with the lit ⌘, so BarShowsArmed holds |
+| LoadClearsBar | `load()` clears the bar (ViewerController.swift:365) | keys-reload | NoMissingModifier: ⌘ stays lit through the reload, so break 5 shows here (a key after the keyboard button, before the hello); the hello arms the new page with the lit ⌘, so BarShowsArmed holds |
 | LoadClearsBar, Resend | both | keys-reload | NoMissingModifier, BarShowsArmed |
-| Resend | the hello sends the lit modifiers again (`keyBar.resend`, ViewerController.swift:648; KeyBar.swift:164-167) | keys-loading | NoMissingModifier, BarShowsArmed |
+| Resend | the hello sends the lit modifiers again (`keyBar.resend`, ViewerController.swift:651; KeyBar.swift:165-168) | keys-loading | NoMissingModifier, BarShowsArmed |
 | TapLetGo | `voxlTap` lets go of holding first (Page.swift:90) | keys-esc | NoExtraModifier |
-| KeyUpLift | the keyup lifts holding's modifiers (Page.swift:103-105) | keys-typing | NothingStuck, NoExtraModifier |
-| ClickLift | `voxlMouse('up')` lifts clickMods (Page.swift:119) | keys-typing | NothingStuck, NoExtraModifier |
-| HoldPress | a key while armed presses the modifiers first (Page.swift:101) | keys-typing | NoMissingModifier |
-| LetGoKey | another trusted keydown lets go of holding (Page.swift:99) | keys-typing | NoExtraModifier |
-| LetGoClick | a mouse down lets go of holding (Page.swift:114) | keys-typing | NoExtraModifier |
+| ChordDisarm | `voxlChord` disarms (Page.swift:97) | keys-esc | NoExtraModifier, BarShowsArmed |
+| ChordBarClear | `chord` clears the bar (KeyBar.swift:154; Paste the same, :186) | keys-esc | nothing: the page's 'armed' message clears it |
+| ChordBarClear (loading) | | keys-loading | NoExtraModifier (a Mac key picked while the page loads goes nowhere; the hello then arms the next key with the ⌘ still lit) |
+| KeyUpLift | the keyup lifts holding's modifiers (Page.swift:112-114) | keys-typing | NothingStuck, NoExtraModifier |
+| ClickLift | `voxlMouse('up')` lifts clickMods (Page.swift:128) | keys-typing | NothingStuck, NoExtraModifier |
+| HoldPress | a key while armed presses the modifiers first (Page.swift:108) | keys-typing | NoMissingModifier |
+| LetGoKey | another trusted keydown lets go of holding (Page.swift:106) | keys-typing | NoExtraModifier |
+| LetGoClick | a mouse down lets go of holding (Page.swift:123) | keys-typing | NoExtraModifier |
 | ButtonUp | pointerup sends b,n,0 (R pointer.ts:77-85) | keys-typing | NothingStuck |
 | ModeUp | `mode`'s didSet sends up while dragging (Pointer.swift:18-26) | keys-pointer | NothingStuck (a Direct drag ended in Trackpad) |
 | ModeUp (holds only) | | keys-hold | nothing: the hold's end lets go |
 | HoldEndUp | a hold's end lets go in either mode (Pointer.swift:197-199) | keys-hold | nothing: the mode switch let go |
 | ModeUp, HoldEndUp | both | keys-hold | NothingStuck |
 
-(A config's baseline break shows in its rows too: `screen-full` ComesBack, `keys-pointer` and `keys-fresh`
-NoExtraModifier, `keys-loading` NoMissingModifier.)
+(A config's baseline break shows in its rows too: `screen-full` ComesBack, `keys-pointer`, `keys-tcp` and
+`keys-fresh` NoExtraModifier, `keys-kbbutton` NoMissingModifier.)
 
-The baseline held on 20 reruns of `check.sh` on 2026-11-13 at the sync below (04f677a, with the keyboard button's
-`KbButton`; the PC, Git Bash, four separate `check.sh` processes at a time, 15 minutes in all): exit 0 each time
-and byte-identical output.
+No guard, since no rule tells the code from the code before it: 5e57a1f's two changes to a close in PhoneScreen.
+`tooWideLater` is cancelled on a close (A ViewerController.swift:670): before, a closed connection's Full hello
+could still put up the Full cover 2 s later, which said what voxl then did (the phone's scale request goes with
+its socket, so the other viewer's Full is the latest), and the next hello takes it back. The 10 s watch counts
+from the first close (:672): see "voxl refusing connections" below. The trusted `beforeinput` disarm
+(A Page.swift:111) is for text with no key, which isn't modeled.
+
+The baseline held on 20 reruns of `check.sh` on 2026-11-13 at the sync below (5e57a1f; the PC, Git Bash, four
+separate `check.sh` processes at a time, 14 minutes in all): exit 0 each time and byte-identical output.
 
 ## Timing contract
 
@@ -201,19 +230,20 @@ The models have no clock. Each holds only under these timing facts; if one chang
 describes the code:
 
 - Quick (about a second or less) against the app's 2, 3, 7, 10 and 30 s timers: the page committing once voxl
-  answers, the worker's socket opening (it reconnects every 1 s, R worker.ts:113-117), voxl's hello right after
-  (its first message, R server.rs:220), voxl's capture rebuild after a scale request (once a second; measured
-  about 0.5 s on the Duo), the 1 s tick. The timers fire only once these are done, so a Sharp request's new hello
-  always cancels `tooWideLater` first.
-- The timers of one try keep their order: `waitLater` (3 s) before `helloLater` (10 s from `load()` or from a
-  close); `helloLater` from `load()` and `waited`'s 7 s retry fire together at about 10 s.
+  answers, the worker's socket opening (it reconnects every 1 s, R worker.ts:113-117), the app hearing it opened
+  (the status's hops from the worker to the page to the app), voxl's hello right after (its first message,
+  R server.rs:220), voxl's capture rebuild after a scale request (once a second; measured about 0.5 s on the Duo),
+  the 1 s tick. The timers fire only once these are done, so a Sharp request's new hello always cancels
+  `tooWideLater` first.
+- The timers of one try keep their order: `waitLater` (3 s) before `helloLater` (10 s from `load()` or, with no
+  watch pending, from a close); `helloLater` from `load()` and `waited`'s 7 s retry fire together at about 10 s.
 - Slow, any time: voxl's answer to a load when `SlowAnswer` (a poor link), a load failing, the first frames after
   a hello (10-30 s around a Mac wake), Dan, iOS and the network. Dan's keys reach a new web view's page from its
-  first frame (`focusKeys` at the picture, A ViewerController.swift:654), or from its commit once he taps the bar's
-  keyboard button (`focusKeys` from `toggleKeyboard`, :706-709, any time there is a web view; voxl's page focuses
+  first frame (`focusKeys` at the picture, A ViewerController.swift:657), or from its commit once he taps the bar's
+  keyboard button (`focusKeys` from `toggleKeyboard`, :714-717, any time there is a web view; voxl's page focuses
   #kbd when it starts, R keyboard.ts:287); his taps on the pad reach it as soon as it commits.
 - Dan's actions in PhoneKeys can interleave with the quick steps (Dan can let go during a reconnect, or tap the
-  pad or type between a new socket opening and voxl's hello).
+  pad or type between a new socket opening and the app hearing it, or voxl's hello).
 
 ## Scope and assumptions
 
@@ -222,12 +252,18 @@ describes the code:
   (R server.rs:296-303, 398-404); the app asks for Sharp only from a screen's Sharp URL (A Machines.swift:17).
 - One step per main-thread job: a script call the app makes runs in the document the view holds at that moment
   (evaluateJavaScript and key events reach the page in order); what the page posts reaches the app in the same
-  step; what the page sends reaches voxl in the same step if the socket is open. A message in flight when the
-  socket breaks is not modeled.
+  step; what the page sends reaches voxl in the same step if the socket is open. In PhoneKeys the worker's socket
+  opening is a step of its own: the page's sends go out from then, and the app hears the open (its release-all)
+  in a later step. A message in flight when the socket breaks is not modeled.
 - WebKit, assumed: `setAllMediaPlaybackSuspended` silences the page's AudioWorklet and lasts across loads in that
   view; `navigator.audioSession.type` belongs to the document, so a new page starts at `auto`, which the silent
   switch mutes; at `didCommit` the injected scripts are in place; a removed web view is silent and its page
   closes, sending r and closing its socket before a new page's first message.
+- WebKit and UIKit, assumed, for the keys' focus (PhoneKeys `focused`): a web view made first responder before
+  its page commits (the keyboard button) keeps that through the commit; hardware keys then reach the #kbd that
+  voxl's page focuses when it starts (R keyboard.ts:287); a view that became first responder before its picture
+  stays so through Resign and Activate (`becameActive` calls `focusKeys` again only once there is a picture,
+  A ViewerController.swift:764).
 - iOS: the app is suspended only after `closePage` (the background task's expiry closes the page first). Opening
   the app counts as Dan's touch (`becameActive` calls `input()`), also when iOS makes it active after a call.
 - voxl is a macOS voxl with Dan's capture-scale patch, not read-only. A voxl process that crashes (no SIGTERM)
@@ -237,20 +273,33 @@ describes the code:
   once the phone has a connected page again, by that reconnect or a fresh page; a socket silent on both ends looks
   the same to voxl (what the phone sends is lost either way), and while it stays silent nothing the app sends
   reaches voxl, so the model doesn't check that time.
-- Real, but in no baseline config (seen in runs while re-syncing to 04f677a): (a) a key or button held on one
-  screen when its socket goes silent stays held there after Dan switches to the other screen, until TCP gives up
-  or he comes back: the hello's release-all reaches only the screen whose page connects, and each screen has its
-  own voxl (silent then switch: `NothingStuck`, path KeyDown, LossSilent, Switch, Commit, SocketOpen, Hello).
-  (b) ⌘ tapped while a page loads misses a pad tap made between the new socket opening and the hello, and stays
-  lit for the next key (`keys-fresh` with `ArmLoading`: `NoMissingModifier`, path Reload, BarToggle, Commit,
-  SocketOpen, Click). Its key version, after the keyboard button, is break 5.
-- Not modeled: voxl's password (the sheet waits for Dan by design; it pauses the hello watch and re-arms it after
-  a credential, A ViewerController.swift:538-557), the Machines screen beyond a reload, 5xx answers, read-only
-  voxl, resize, downloads, the clipboard, the cursor, the idle timer, old web views after `newWebView` (assumed
-  silent). In PhoneKeys: hardware modifier keys, ⌘V's delayed paste (`pendingPaste`, R keyboard.ts:122-126, 179-185),
-  iOS's Korean keyboard mirror (R keyboard.ts:146-178), the bar's Mac-key chords and Paste (`voxlChord` ignores
-  armed modifiers; like `voxlTap` it lets go of holding first, A Page.swift:94), F-keys, autorepeat, the key
-  mapping before the hello says the Mac is a Mac, the Files panel, zoom, a right-click.
+- Real, but in no baseline config (seen in runs while re-syncing to 04f677a, again at 5e57a1f): (a) a key or
+  button held on one screen when its socket goes silent stays held there after Dan switches to the other screen,
+  until TCP gives up or he comes back: the app's release-all at a socket's open reaches only the screen whose page
+  connects, and each screen has its own voxl (silent then switch: `NothingStuck`, path KeyDown, LossSilent,
+  Switch, Commit, SocketOpen, StatusOpen, Hello). (b) ⌘ tapped while a page loads misses a pad tap made between
+  the new socket opening and the hello, and stays lit for the next key (`keys-fresh` with `ArmLoading`:
+  `NoMissingModifier`, path Reload, BarToggle, Commit, SocketOpen, Click). Its key version, after the keyboard
+  button, is break 5.
+- voxl refusing connections (voxl down while its page stays in the view: the worker's socket closes every second,
+  R worker.ts:113-117): the model has one close per lost socket and no clock, so it shows the 10 s watch firing
+  10 s after the close, a fresh page, the failed load and "isn't answering". Since 5e57a1f that is what the code
+  does (the watch counts from the first close, A ViewerController.swift:672); before it each close restarted the
+  watch, so it never fired and voxl's own "Reconnecting…" stayed on the last frame. No rule tells the two apart:
+  that cover is true too, and the page reconnects by itself once voxl is back.
+- Not modeled: voxl's password (the sheet waits for Dan by design; a challenge counts as an answer, `gotAnswer`;
+  it pauses the hello watch and re-arms it after a credential; after Cancel, the page's later challenges are
+  cancelled without a sheet until he taps Sign in, and the watch skips while `needsPassword`,
+  A ViewerController.swift:410-421, 542-564), the Machines screen beyond a reload, 5xx answers, read-only voxl,
+  resize, downloads, the clipboard, the cursor, the idle timer, old web views after `newWebView` (assumed
+  silent). In PhoneKeys: hardware modifier keys (since 5e57a1f the keydown listener ignores them on either side,
+  A Page.swift:103-105), text with no key (a suggestion, dictation: keyboard.ts's input listener types it,
+  R keyboard.ts:265-282, and a trusted `beforeinput` disarms, A Page.swift:111), Paste's paste event and
+  keyboard.ts's delayed ⌘V (`pendingPaste`, R keyboard.ts:122-126, 179-185, 195-199: Paste's ⌘V is a chord
+  here), the chords' own modifiers apart from ⌘ (⌃↑; ⌘ stands for all four, so a chord's taking the armed ones
+  doesn't show), voxl's hello again on a connection when it restarts its stream (since 5e57a1f it only re-arms
+  the lit modifiers), iOS's Korean keyboard mirror (R keyboard.ts:146-178), F-keys, autorepeat, the key mapping
+  before the hello says the Mac is a Mac, the Files panel, zoom, a right-click.
 
 ## Coverage record
 
@@ -258,31 +307,33 @@ describes the code:
 
 | Model action | Code |
 |---|---|
-| PhoneScreen `UpdateAudio`, `Input`, `Tick` | A ViewerController.swift:719-739, 795-804, 178 |
-| `NewWebView`, `Load`, `ClosePage`, `DocGone` | A ViewerController.swift:329-389; Machines.swift:14-27 |
-| `Waited`, `RetryFires`, `HelloFires`, `Fail`, `NotAnswering`, `CoverButton` | A ViewerController.swift:391-467, 511-518 |
-| `Answer`, `Crash` | A ViewerController.swift:520-535, 559-570 |
-| `SocketOpens`, `Rebuild`, `HelloIn`, `Picture`, `TooWideFires`, `Drop`, `Hang`, `Dead`, `Down` | A ViewerController.swift:601-671; Page.swift:10-67; R worker.ts:97-147, main.ts:118-158, server.rs:214-305, 398-404 |
+| PhoneScreen `UpdateAudio`, `Input`, `Tick` | A ViewerController.swift:727-747, 803-812, 176 |
+| `NewWebView`, `Load`, `ClosePage`, `DocGone` | A ViewerController.swift:327-386; Machines.swift:14-27 |
+| `Waited`, `RetryFires`, `HelloFires`, `Fail`, `NotAnswering`, `CoverButton` | A ViewerController.swift:388-476, 520-527 |
+| `Answer`, `Crash` | A ViewerController.swift:423-430, 529-540, 566-577 |
+| `SocketOpens`, `Rebuild`, `HelloIn`, `StatusClosed`, `Picture`, `TooWideFires`, `Drop`, `Hang`, `Dead`, `Down` | A ViewerController.swift:608-679; Page.swift:10-67; R worker.ts:97-147, main.ts:118-158, server.rs:214-305, 398-404 |
 | `OtherFull`, `OtherGone` | R server.rs:296-303, 398-404 |
 | `AudioStarts` | R main.ts:91-96, 189; audio.ts:10-31 |
-| `BecomeActive`, `Resign`, `Background`, `Foreground`, `Suspend`, `CloseFires` | A ViewerController.swift:750-787; App.swift:25-28 |
-| `Touch`, `Idle` | A App.swift:37-60; ViewerController.swift:719-725 |
-| `SwitchScreen`, `Reconnect` | A ViewerController.swift:119-122, 294-309 |
-| PhoneKeys `KeyIn`, `KeyOut`, `LetGo`, `MouseDown`, `MouseUp`, `VoxlTap`, `VoxlRelease`, `Disarm` | A Page.swift:74-142 |
+| `BecomeActive`, `Resign`, `Background`, `Foreground`, `Suspend`, `CloseFires` | A ViewerController.swift:758-795; App.swift:25-28 |
+| `Touch`, `Idle` | A App.swift:37-60; ViewerController.swift:727-733 |
+| `SwitchScreen`, `Reconnect` | A ViewerController.swift:117-120, 292-307 |
+| PhoneKeys `KeyIn`, `KeyOut`, `LetGo`, `MouseDown`, `MouseUp`, `VoxlTap`, `VoxlChord`, `VoxlRelease`, `Disarm` | A Page.swift:74-151 |
 | `KbdDown`, `KbdUp`, `KbdReleaseAll`, `Send` | R keyboard.ts:121-145, 187-217, 285; pointer.ts:62-89; main.ts:58-63; worker.ts:97-99, 404-406 |
 | `Post`, `ReleaseAll`, `Judge` | R server.rs:258-305, 329-381; mac/input.rs:175-226, 244-287, 336-435 |
-| `Release`, `Load`, `Teardown`, `Switch`, `Reload`, `Resign`, `Activate`, `Background`, `ClosePage` | A ViewerController.swift:300-309, 329-389, 434-441, 531-535, 680-681, 712-715, 750-782; R main.ts:118-121 |
-| `DragStart`, `DragEnd`, `EndDrag`, `EndAll`, `Click`, `ModeFlip` | A Pointer.swift:18-26, 44, 92-111, 164-214, 256-268; ViewerController.swift:137-140 |
-| `BarToggle`, `BarTap` | A KeyBar.swift:146-161, 170-180 |
-| `KbButton`, `Load`'s kept focus | A KeyBar.swift:94; ViewerController.swift:149, 204, 215, 353-374, 698-709; Page.swift:54-61; R keyboard.ts:287 |
-| `LossLoud`, `LossSilent`, `TcpGivesUp`, `Commit`, `SocketOpen` | A ViewerController.swift:520-529, 661-671; R worker.ts:104-117; server.rs:258-291 |
-| `Hello`, `Picture`, `KeyDown`'s and `KeyUp`'s focus | A ViewerController.swift:611-654, 698-704, 750-759; KeyBar.swift:163-167; Page.swift:13-15, 32-41; R server.rs:214-220, worker.ts:155-164, keyboard.ts:141-145, 285, main.ts:108-121 |
+| `Release`, `Load`, `Teardown`, `Switch`, `Reload`, `Resign`, `Activate`, `Background`, `ClosePage` | A ViewerController.swift:298-307, 327-386, 443-450, 536-540, 688-689, 720-723, 758-790; R main.ts:118-121 |
+| `DragStart`, `DragEnd`, `EndDrag`, `EndAll`, `Click`, `ModeFlip` | A Pointer.swift:18-26, 44, 92-111, 164-214, 256-268; ViewerController.swift:136-139 |
+| `BarToggle`, `BarTap`, `BarChord` | A KeyBar.swift:146-162, 171-181, 183-187 |
+| `KbButton`, `Load`'s kept focus | A KeyBar.swift:94; ViewerController.swift:102, 147-148, 202, 213, 351-371, 706-717; Page.swift:54-61; R keyboard.ts:287 (Layout.swift:22-53 only for "beside") |
+| `LossLoud`, `LossSilent`, `TcpGivesUp`, `Commit`, `SocketOpen`, `StatusOpen` | A ViewerController.swift:529-534, 664-679; Page.swift:35; R worker.ts:97-117; keyboard.ts:141-145, 285; server.rs:258-291, 381 |
+| `Hello`, `Picture`, `KeyDown`'s and `KeyUp`'s focus | A ViewerController.swift:618-663, 706-712, 758-767; KeyBar.swift:164-168; Page.swift:13-15, 32-41; R server.rs:214-220, worker.ts:155-164, main.ts:108-121 |
 
 Drift guard: `ios/model/covered.sha256` holds a sha256 of
 `ios/Voxl/{App,KeyBar,Machines,Page,Pointer,ViewerController}.swift` (carriage returns left out). `check.sh`
-exits 3 when one differs. voxl isn't in this repo: check its paths above by hand when voxl's version moves.
+exits 3 when one differs. Layout.swift isn't covered: no rule leans on it (the bar is above the cover because
+ViewerController adds it later, :102, 148). voxl isn't in this repo: check its paths above by hand when voxl's
+version moves.
 
-Sync: voxl-viewer `04f677a` (branch `ios-duo`, aklabs-korea/voxl-viewer), voxl 0.3.4. Line numbers above are at
+Sync: voxl-viewer `5e57a1f` (branch `ios-duo`, aklabs-korea/voxl-viewer), voxl 0.3.4. Line numbers above are at
 these. Move this line, and record `covered.sha256` again, only after you confirmed the models describe the code
 at the new commit.
 

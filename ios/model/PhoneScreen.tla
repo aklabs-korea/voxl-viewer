@@ -66,24 +66,24 @@ Drop1(q, x) == SelectSeq(q, LAMBDA y : y # x)
 
 VARIABLES
   scene,     \* "active", "inactive", "background", "suspended" (A App.swift:25-28)
-  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:56, 725)
+  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:54, 733)
   row,       \* the screen asked for
   web,       \* a web view exists
   dscr,      \* the screen the view's page was loaded for (loaded, :38)
   dsharp,    \* that page was loaded from the screen's Sharp URL (?scale=0.8, A Machines.swift:17)
   sharp,     \* [Screens -> BOOLEAN]: the screen has a Sharp URL (Screen.sharp, A Machines.swift:14)
   answered, committed, hello, picture, failing, tooWide,   \* the try's flags (:39-42)
-  waitT,     \* waitLater armed (3 s, :391-396)
-  retryT,    \* retryLater: "none", "cond" (waited's, :403-408: loads only if still unanswered),
-             \* "always" (retry's, :438-440)
-  helloT,    \* helloLater (10 s, :412-421): "off", or armed by "load" or by a socket "closed"
-  closeT,    \* closeLater armed (30 s, :775-780)
-  wideT,     \* tooWideLater armed (2 s, :50, 627-636)
-  cover,     \* the Cover (:827-868) as showCover left it (:444-447): "off" (hidden), "label"
+  waitT,     \* waitLater armed (3 s, :388-393)
+  retryT,    \* retryLater: "none", "cond" (waited's, :400-405: loads only if still unanswered),
+             \* "always" (retry's, :447-449)
+  helloT,    \* helloLater (10 s, :410-421): "off", or armed by "load" or by a socket "closed"
+  closeT,    \* closeLater armed (30 s, :783-788)
+  wideT,     \* tooWideLater armed (2 s, :48, 634-643)
+  cover,     \* the Cover (:835-876) as showCover left it (:453-456): "off" (hidden), "label"
              \* (the screen's name, no button), "dim" ("isn't answering. Trying again every 3 s."
              \* + "Show <other>", action otherScreen), "full" ("Another viewer asked ... for Full
              \* ..." + "Ask for Sharp", action sharp)
-  muted,     \* muted: Bool?, the last sound state applied (:59): "nil", "yes", "no"
+  muted,     \* muted: Bool?, the last sound state applied (:57): "nil", "yes", "no"
   nav,       \* the view's document: "none" (blank), "asked" (a load out), "page" (voxl's page)
   sock,      \* the page's socket: "none", "closed" (the worker reconnects every 1 s), "open",
              \* "hung" (neither opens nor closes), "dead" (looks open, nothing comes)
@@ -123,7 +123,7 @@ Set(r) == /\ scene' = r.scene /\ recent' = r.recent /\ row' = r.row /\ web' = r.
 -----------------------------------------------------------------------------
 (* The app's code *)
 
-\* updateAudio (A ViewerController.swift:729-739): audible = committed &&
+\* updateAudio (A ViewerController.swift:737-747): audible = committed &&
 \* active && recentInput; nothing happens if muted already says so; else the
 \* view's suspension and the page's audio session type. The script call runs
 \* in the view's document now: if voxl's page hasn't committed yet it lands in
@@ -137,7 +137,7 @@ UpdateAudio(r) ==
           ELSE [r EXCEPT !.muted = m, !.susp = ~a,
                          !.session = IF r.nav = "page" THEN (IF a THEN "playback" ELSE "ambient") ELSE @]
 
-\* input() (:719-723): updateAudio only when back from 5 minutes idle.
+\* input() (:727-731): updateAudio only when back from 5 minutes idle.
 Input(r) == LET r1 == [r EXCEPT !.recent = TRUE] IN IF r.recent THEN r1 ELSE UpdateAudio(r1)
 
 \* The page in the view goes: its socket closes, and voxl drops the phone's
@@ -147,14 +147,14 @@ DocGone(r) ==
   IN [r1 EXCEPT !.nav = "none", !.sock = "none", !.pagePic = FALSE, !.docWide = FALSE,
                 !.audioOn = FALSE, !.session = "auto"]
 
-\* newWebView (:329-351): the old view suspended and removed (its page goes),
-\* a new one suspended (:348), muted = nil (:350). Assumed: the old view is
+\* newWebView (:327-349): the old view suspended and removed (its page goes),
+\* a new one suspended (:346), muted = nil (:348). Assumed: the old view is
 \* silent from here on.
 NewWebView(r) ==
   [DocGone(r) EXCEPT !.web = TRUE, !.susp = Has("FreshSuspend"),
                      !.muted = IF Has("FreshMute") THEN "nil" ELSE @]
 
-\* load() (:353-374): retryLater cleared; a new view if none or the page
+\* load() (:351-371): retryLater cleared; a new view if none or the page
 \* committed; the flags reset, tooWideLater cancelled; the label unless failing;
 \* waitLater (3 s) and helloLater (10 s) armed; the load goes out for the
 \* screen asked for, from its Sharp URL if it has one (page, Machines.swift:17).
@@ -166,36 +166,42 @@ Load(r) ==
                 !.waitT = TRUE, !.helloT = IF Has("WatchHello") THEN "load" ELSE "off",
                 !.nav = "asked", !.dscr = r2.row, !.dsharp = r2.sharp[r2.row]]
 
-\* go(to:) and switched() (:294-309): failing cleared, load().
+\* go(to:) and switched() (:292-307): failing cleared, load().
 Switched(r, to) == Load([r EXCEPT !.row = to, !.failing = FALSE])
 
-\* notAnswering (:423-432).
+\* notAnswering (:432-441).
 NotAnswering(r) == [r EXCEPT !.failing = TRUE, !.cover = "dim"]
 
-\* closePage (:377-389): the view goes; committed cleared, the connect timers
+\* closePage (:374-386): the view goes; committed cleared, the connect timers
 \* and tooWideLater cancelled; answered, hello, picture, failing, tooWide, muted kept.
 ClosePage(r) ==
   IF ~r.web THEN r
   ELSE [DocGone(r) EXCEPT !.web = FALSE, !.committed = FALSE, !.waitT = FALSE, !.retryT = "none",
                           !.helloT = "off", !.wideT = FALSE]
 
-\* The page's messages (:601-692). hello (:611-648): tooWide arms
+\* The page's messages (:608-700). hello (:618-651): tooWide arms
 \* tooWideLater, which puts up the Full cover 2 s later if tooWide still holds
 \* (every connection first hears Full until the page's Sharp request lands); a
 \* playable hello cancels it and takes the cover away once the picture played
-\* (:637-638), and before a frame, since ce88951, takes a Full cover back to
-\* the label (coverAction is .sharp, :639-641: only the Full cover has that
+\* (:644-645), and before a frame, since ce88951, takes a Full cover back to
+\* the label (coverAction is .sharp, :646-649: only the Full cover has that
 \* action, and cover.hide() runs only once the picture played). Without
-\* WideWaits, as before eb7470e: the Full cover at once. The hello's blur and
-\* keyBar.resend (:643-648) are keys: PhoneKeys. status closed (:664-667).
-\* picture (:649-660).
+\* WideWaits, as before eb7470e: the Full cover at once. The hello's
+\* keyBar.resend (:650-651) and the blur at the socket's open (:673-679) are
+\* keys: PhoneKeys. status closed (:667-672): hello false; since 5e57a1f,
+\* tooWideLater cancelled (:670) and the 10 s watch started only if none is
+\* pending (:672; its work sets helloLater nil when it runs, :414), so it
+\* counts from the first close. Neither is a guard: no rule here tells them
+\* from the code before (see the skill's scope). picture (:652-663).
 HelloIn(r, w) ==
   [r EXCEPT !.hello = TRUE, !.helloT = "off", !.tooWide = w, !.wideT = w /\ Has("WideWaits"),
             !.cover = IF w THEN (IF Has("WideWaits") THEN @ ELSE "full")
                       ELSE IF r.picture THEN (IF Has("HelloHides") THEN "off" ELSE @)
                       ELSE IF r.cover = "full" /\ Has("HelloSharp") THEN "label"
                       ELSE @]
-StatusClosed(r) == [r EXCEPT !.hello = FALSE, !.helloT = IF Has("WatchHello") THEN "closed" ELSE @]
+StatusClosed(r) ==
+  [r EXCEPT !.hello = FALSE, !.wideT = FALSE,
+            !.helloT = IF Has("WatchHello") /\ r.helloT = "off" THEN "closed" ELSE @]
 PictureIn(r) ==
   [r EXCEPT !.picture = TRUE, !.failing = FALSE, !.waitT = FALSE,
             !.cover = IF ~r.tooWide /\ Has("PictureHides") THEN "off" ELSE @]
@@ -231,7 +237,7 @@ Init ==
 (* Quick steps *)
 
 \* main() starts the AudioContext (R main.ts:189, audio.ts:10-31; the config
-\* lets it play without a gesture, A ViewerController.swift:84).
+\* lets it play without a gesture, A ViewerController.swift:82).
 AudioStarts == web /\ nav = "page" /\ ~audioOn /\ scene # "suspended" /\ Set([Now EXCEPT !.audioOn = TRUE])
 
 \* The worker's socket opens (R worker.ts:104-112) and voxl's first message
@@ -256,9 +262,10 @@ Rebuild(s) ==
      IN Set(IF web /\ nav = "page" /\ sock = "open" /\ dscr = s THEN HelloIn([r0 EXCEPT !.docWide = w], w)
             ELSE r0)
 
-\* voxl answers the load: the response (decidePolicyFor, :559-570) and the
-\* commit (didCommit, :520-529) of a new page, its socket connecting. The
-\* commit takes a "isn't answering" cover down and applies the sound rule.
+\* voxl answers the load: the response (decidePolicyFor, :566-577) and the
+\* commit (didCommit, :529-534) of a new page, its socket connecting. The
+\* commit's gotAnswer (:423-430, since 5e57a1f) takes a "isn't answering"
+\* cover down; then the sound rule.
 Answer ==
   /\ web /\ nav = "asked" /\ up[dscr] /\ scene # "suspended"
   /\ LET r0 == [Now EXCEPT !.answered = TRUE, !.committed = TRUE, !.nav = "page", !.sock = "closed",
@@ -267,7 +274,7 @@ Answer ==
                ELSE r0
      IN Set(IF Has("CommitAudio") THEN UpdateAudio(r1) ELSE r1)
 
-\* The 1 s tick (:795-804), when updateAudio has work.
+\* The 1 s tick (:803-812), when updateAudio has work.
 Tick == Has("TickMutes") /\ scene # "suspended" /\ UpdateAudio(Now) # Now /\ Set(UpdateAudio(Now))
 
 \* voxl answers the load quickly, unless SlowAnswer.
@@ -281,7 +288,7 @@ Settled == ~ENABLED Quick
 -----------------------------------------------------------------------------
 (* Slow steps of the page and voxl *)
 
-\* The load fails (NSURLError, :511-518): retry (:434-441): not answering, a
+\* The load fails (NSURLError, :520-527): retry (:443-450): not answering, a
 \* load 3 s later whatever happens.
 Fail ==
   /\ web /\ nav = "asked" /\ ~up[dscr] /\ scene # "suspended"
@@ -298,26 +305,29 @@ Picture ==
 (* The app's timers: they fire only once no quick step is left *)
 
 \* The timers of one try keep their order: load() arms waitLater (3 s) and
-\* helloLater (10 s) together, a close re-arms helloLater for 10 s later, and
-\* waited arms its retry 7 s after it runs, so waitLater fires first, and the
-\* load's helloLater and waited's retry fire together at about 10 s.
+\* helloLater (10 s) together, a close with no watch pending arms helloLater
+\* for 10 s later, and waited arms its retry 7 s after it runs, so waitLater
+\* fires first, and the load's helloLater and waited's retry fire together
+\* at about 10 s.
 \* tooWideLater (2 s) fires after voxl's capture rebuild (within 1 s), so a
 \* Sharp request's new hello always cancels it first.
 Ticking == Settled /\ scene # "suspended"
 
-\* waited (:399-409).
+\* waited (:396-406).
 Waited ==
   /\ waitT /\ Ticking
   /\ Set(IF answered THEN [Now EXCEPT !.waitT = FALSE]
          ELSE LET r == NotAnswering([Now EXCEPT !.waitT = FALSE])
               IN IF retryT = "none" THEN [r EXCEPT !.retryT = "cond"] ELSE r)
 
-\* retryLater (:403-408 or :438). waited's comes after the load's helloLater.
+\* retryLater (:400-405 or :447). waited's comes after the load's helloLater.
 RetryFires ==
   /\ retryT # "none" /\ Ticking /\ (retryT = "always" \/ helloT # "load")
   /\ Set(IF retryT = "cond" /\ answered THEN [Now EXCEPT !.retryT = "none"] ELSE Load(Now))
 
-\* helloLater (:414-418), after waitLater; with waited's retry due at once, both.
+\* helloLater (:412-418; helloLater nil, :414; it also waits while
+\* needsPassword, :415, not modeled), after waitLater; with waited's retry
+\* due at once, both.
 HelloFires ==
   /\ helloT # "off" /\ ~waitT /\ Ticking
   /\ LET r == [Now EXCEPT !.helloT = "off"]
@@ -325,12 +335,12 @@ HelloFires ==
             ELSE IF helloT = "load" /\ retryT = "cond" /\ ~answered THEN Load(r)
             ELSE r)
 
-\* tooWideLater (:630-634): the Full cover if the last hello is still too wide.
+\* tooWideLater (:637-641): the Full cover if the last hello is still too wide.
 TooWideFires ==
   /\ wideT /\ Ticking
   /\ Set([Now EXCEPT !.wideT = FALSE, !.cover = IF tooWide THEN "full" ELSE @])
 
-\* closeLater, or the background task's expiry (:771-780): closePage.
+\* closeLater, or the background task's expiry (:779-788): closePage.
 CloseFires == closeT /\ scene = "background" /\ Settled /\ Set(ClosePage([Now EXCEPT !.closeT = FALSE]))
 
 -----------------------------------------------------------------------------
@@ -338,7 +348,7 @@ CloseFires == closeT /\ scene = "background" /\ Settled /\ Set(ClosePage([Now EX
 
 Dan(a) == a \in DanActs /\ dann < DanMax
 
-\* sceneDidBecomeActive -> becameActive (:750-759): active, input(), the
+\* sceneDidBecomeActive -> becameActive (:758-767): active, input(), the
 \* close cancelled, load() if there is no view, updateAudio.
 BecomeActive ==
   /\ scene = "inactive"
@@ -346,20 +356,20 @@ BecomeActive ==
          r1 == IF ~r0.web THEN Load(r0) ELSE r0
      IN Set(UpdateAudio(r1))
 
-\* sceneWillResignActive -> resignedActive (:761-767).
+\* sceneWillResignActive -> resignedActive (:769-775).
 Resign ==
   /\ Dan("leave") /\ scene = "active"
   /\ LET r0 == [Now EXCEPT !.scene = "inactive", !.dann = @ + 1]
      IN Set(IF Has("ResignMutes") THEN UpdateAudio(r0) ELSE r0)
 
-\* sceneDidEnterBackground -> enteredBackground (:769-782).
+\* sceneDidEnterBackground -> enteredBackground (:777-790).
 Background == scene = "inactive" /\ "leave" \in DanActs /\ Set([Now EXCEPT !.scene = "background", !.closeT = TRUE])
 
 \* iOS suspends the app once its background task is over: after closePage
 \* (its expiry handler closes the page first).
 Suspend == scene = "background" /\ ~web /\ Set([Now EXCEPT !.scene = "suspended"])
 
-\* sceneWillEnterForeground -> enteringForeground (:784-787).
+\* sceneWillEnterForeground -> enteringForeground (:792-795).
 Foreground == scene \in {"background", "suspended"} /\ Set([Now EXCEPT !.scene = "inactive", !.closeT = FALSE])
 
 \* A touch or a key in the app (ViewerWindow.sendEvent, App.swift:37-60). A
@@ -378,7 +388,7 @@ SwitchScreen ==
   /\ Dan("switch") /\ scene = "active"
   /\ Set(Switched(Input([Now EXCEPT !.dann = @ + 1]), Other(row)))
 
-\* The cover's button (coverButton, :449-467) does what the cover offers:
+\* The cover's button (coverButton, :458-476) does what the cover offers:
 \* "Show <other>" the other screen; "Ask for Sharp" gives the screen its Sharp
 \* URL and loads. Without CoverAction, as before a302a7d: the other screen if
 \* failing, else Sharp and load. The ghost: a button that didn't say
@@ -390,7 +400,7 @@ CoverButton ==
      IN Set(IF toOther THEN [Switched(r0, Other(row)) EXCEPT !.stray = stray \/ cover # "dim"]
             ELSE Load([r0 EXCEPT !.sharp[row] = TRUE]))
 
-\* More > Reconnect (:119-122).
+\* More > Reconnect (:117-120).
 Reconnect ==
   /\ Dan("reconnect") /\ scene = "active"
   /\ Set(Load([Input([Now EXCEPT !.dann = @ + 1]) EXCEPT !.failing = FALSE]))
@@ -418,7 +428,7 @@ Hang == Ev("hang") /\ web /\ nav = "page" /\ sock = "closed" /\ Set([Now EXCEPT 
 Dead == Ev("dead") /\ web /\ nav = "page" /\ sock = "open" /\ Set([Now EXCEPT !.sock = "dead", !.envn = @ + 1])
 
 \* The page's web process ends (webViewWebContentProcessDidTerminate,
-\* :531-535): load().
+\* :536-540): load().
 Crash == Ev("crash") /\ web /\ scene # "suspended" /\ Set(Load([DocGone(Now) EXCEPT !.envn = @ + 1]))
 
 \* Another viewer asks screen s for Full (cs,1: its request is the latest),

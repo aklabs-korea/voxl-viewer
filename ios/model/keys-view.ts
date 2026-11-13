@@ -12,6 +12,7 @@ type Vars = {
   doc: string;
   focused: boolean;
   sock: string;
+  opened: boolean;
   hello: boolean;
   armed: string[];
   hold: { code: string; mods: string[] };
@@ -20,7 +21,6 @@ type Vars = {
   mac: Record<string, Record<string, string[]>>;
   btn: Record<string, string[]>;
   stale: Record<string, boolean>;
-  reconnecting: boolean;
   fresh: boolean;
   bad: string[];
 };
@@ -51,7 +51,8 @@ const macHolds = (v: Vars) => {
 const app = (v: Vars) => {
   const where = v.scene === "active" ? `the app on screen ${v.row}` : v.scene === "inactive" ? "the app behind" : "the app in the background";
   const page = v.doc === "none" ? "page closed" : v.doc === "blank" ? "loading"
-    : v.sock !== "open" ? "reconnecting" : v.hello ? "connected" : "connected, hello not in yet";
+    : v.sock !== "open" ? "reconnecting" : !v.opened ? "connected, the app not told yet"
+    : v.hello ? "connected" : "connected, hello not in yet";
   const keys = v.doc === "page" && !v.focused ? " (keys go nowhere until the picture or the keyboard button)" : "";
   return `${where}, ${page}${keys}`;
 };
@@ -83,6 +84,7 @@ export const step = (action: string, from: Vars, to: Vars) => {
     case "ModeFlip": return `Dan switches to ${to.mode === "direct" ? "Direct" : "Trackpad"}`;
     case "BarToggle": return (to.bar ?? []).length ? "Dan taps ⌘ on the bar" : "Dan taps ⌘ off on the bar";
     case "BarTap": return "Dan taps Esc on the bar";
+    case "BarChord": return "Dan picks a Mac key on the bar (a chord with ⌘)";
     case "Resign": return "the app goes behind";
     case "Activate": return "the app comes back to the front";
     case "Background": return "the app goes to the background";
@@ -94,8 +96,9 @@ export const step = (action: string, from: Vars, to: Vars) => {
     case "LossSilent": return "the socket drops on the phone only";
     case "TcpGivesUp": return "TCP gives up: voxl drops the old connection";
     case "Commit": return "the new page commits";
-    case "SocketOpen": return "the page connects";
-    case "Hello": return "voxl's hello reaches the app: release-all, the bar's ⌘ sent again";
+    case "SocketOpen": return "the page's socket opens";
+    case "StatusOpen": return "the app hears the socket opened: release-all";
+    case "Hello": return "voxl's hello reaches the app: the bar's ⌘ sent again";
     case "Picture": return "the first frame: the view takes the keys";
     case "KbButton": return "Dan taps the bar's keyboard button: the view takes the keys";
     case "Done": return null;

@@ -19,25 +19,28 @@
 (* once ("pad": a hold on the pad; "picHold": a still hold on the picture  *)
 (* in Trackpad; "picPan": a drag on the picture in Direct; "pointer": an   *)
 (* iPad trackpad or mouse dragging on the picture), the Trackpad/Direct    *)
-(* switch, the key bar's ⌘, its Esc and its keyboard button. ⌘ stands for  *)
-(* all four bar modifiers: Page.input treats them alike. Every drag shares *)
+(* switch, the key bar's ⌘, its Esc, its Mac keys (a chord: ⌘Space, ⌘Tab, *)
+(* ⌃↑, ⌘F3, and Paste's ⌘V) and its keyboard button. ⌘ stands for all     *)
+(* four bar modifiers: Page.input treats them alike. Every drag shares     *)
 (* Pointer's one dragging flag.                                            *)
 (*                                                                         *)
 (* Steps. One step is one main-thread job of the app or the page: a        *)
 (* script call the app makes runs in the document the view holds at that   *)
 (* moment (evaluateJavaScript and key events go to the page in order), and *)
 (* what the page sends reaches its voxl process in the same step if the    *)
-(* socket is open (worker.ts:97-99 drops it otherwise). The page's         *)
-(* 'armed' message reaches the app's bar in the same step. Quick steps     *)
-(* (the commit of a new page, the worker's 1 s reconnect, voxl's hello on  *)
-(* a new connection) can interleave with Dan; the promises are checked     *)
-(* once no quick step is left (Settled). Off removes guards, to show each  *)
-(* one matters.                                                            *)
+(* worker's socket is open (worker.ts:97-99 drops it otherwise). The       *)
+(* page's 'armed' and 'status' messages reach the app in the same step.    *)
+(* Quick steps (the commit of a new page, the worker's 1 s reconnect, the  *)
+(* app's handling of the socket's open, voxl's hello on a new connection)  *)
+(* can interleave with Dan; the promises are checked once no quick step is *)
+(* left (Settled). Off removes guards, to show each one matters.           *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS Letters, Presses, Clicks, Drags, Kinds, Flips, Arms, Taps, Overlap, ArmLoading, Events, EnvMax,
-          Off
+\* Chords: the bar's Mac keys Dan may pick. KbLoading: Dan may tap the bar's
+\* keyboard button before the page's picture gives the view the keys.
+CONSTANTS Letters, Presses, Clicks, Drags, Kinds, Flips, Arms, Taps, Chords, Overlap, ArmLoading, KbLoading,
+          Events, EnvMax, Off
 
 Screens    == {1, 2}
 MacKeys    == {"a", "b", "Cmd"}     \* Injector.pressed (letters) and mods (⌘), R mac/input.rs:160-164
@@ -56,14 +59,14 @@ Free       == {}                    \* a Mac key or button no input holds
 \* checked once the phone has a connected page again (see Settled).
 EventNames == {"leave", "switch", "reload", "loud", "silent"}
 Guards     == {"Blur", "Hidden", "Bye", "Disarm", "BarClear", "ArmedMsg", "KeyUpLift", "ClickLift",
-               "HoldPress", "ButtonUp", "ReconnectRelease", "LetGoKey", "LetGoClick", "LoadClearsBar",
-               "ModeUp", "HoldEndUp", "TapLetGo", "HelloRelease", "Resend"}
+               "HoldPress", "ButtonUp", "OpenRelease", "LetGoKey", "LetGoClick", "LoadClearsBar",
+               "ModeUp", "HoldEndUp", "TapLetGo", "Resend", "ChordDisarm", "ChordBarClear"}
 DragKinds  == {"pad", "picHold", "picPan", "pointer"}
 NoHold     == [code |-> None, mods |-> {}]
 
 ASSUME /\ Letters \subseteq {"a", "b"} /\ Events \subseteq EventNames /\ Off \subseteq Guards
-       /\ {Presses, Clicks, Drags, Flips, Arms, Taps, EnvMax} \subseteq Nat /\ Overlap \in BOOLEAN
-       /\ ArmLoading \in BOOLEAN /\ Kinds \subseteq DragKinds
+       /\ {Presses, Clicks, Drags, Flips, Arms, Taps, Chords, EnvMax} \subseteq Nat /\ Overlap \in BOOLEAN
+       /\ ArmLoading \in BOOLEAN /\ KbLoading \in BOOLEAN /\ Kinds \subseteq DragKinds
 
 Has(g)   == g \notin Off
 Other(s) == 3 - s
@@ -77,20 +80,19 @@ VARIABLES
   row,       \* the screen on show
   mode,      \* Pointer.mode: "trackpad" or "direct" (A Pointer.swift:18-26)
   dragging,  \* Pointer.dragging, one flag for every drag (A Pointer.swift:44)
-  bar,       \* KeyBar.armed: the lit modifiers (A KeyBar.swift:11, 170-180)
+  bar,       \* KeyBar.armed: the lit modifiers (A KeyBar.swift:11, 171-181)
   doc,       \* the web view's document: "none" (closePage), "blank" (loading), "page" (voxl's page)
   focused,   \* the web view is the first responder, so Dan's keys reach the page's #kbd: from
-             \* focusKeys (A ViewerController.swift:698-704), at the page's first picture (:649-654)
-             \* or the key bar's keyboard button (:706-709); a web view load() makes has none
-             \* (:357, 329-351), one it loads again (no commit since) keeps what it had
+             \* focusKeys (A ViewerController.swift:706-712), at the page's first picture (:652-657)
+             \* or the key bar's keyboard button (:714-717); a web view load() makes has none
+             \* (:355, 327-349), one it loads again (no commit since) keeps what it had
   sock,      \* the worker's socket: "closed" (it reconnects in 1 s) or "open"
+  opened,    \* the app has handled this socket's status open (A ViewerController.swift:673-679)
   hello,     \* the app's hello: voxl's hello on this connection reached it (A ViewerController.swift:39,
-             \* 612; cleared by load() :362 and a close :665)
-  reconnecting, \* the page's socket closed since load(): its next open is a reconnect
-             \* (A ViewerController.swift:48-49, 367)
+             \* 619; cleared by load() :360 and a close :668)
   armed,     \* Page.input's armed (A Page.swift:80)
-  hold,      \* Page.input's holding: [code, mods], code None when null (A Page.swift:80, 101)
-  clickMods, \* Page.input's clickMods ({} when null; never set to []) (A Page.swift:106, 115)
+  hold,      \* Page.input's holding: [code, mods], code None when null (A Page.swift:80, 108)
+  clickMods, \* Page.input's clickMods ({} when null; never set to []) (A Page.swift:115, 124)
   down,      \* keyboard.ts's down: the codes it pressed ("Cmd" is MetaLeft) (R keyboard.ts:121)
   mac,       \* [Screens -> [MacKeys -> the inputs it is held for]]: what that screen's
              \* voxl has macOS hold (Free: not held). Inputs: a letter, "drag", "tap".
@@ -100,20 +102,20 @@ VARIABLES
   bad        \* (ghost) "extra", "missing": a key or click reached the Mac with modifiers
              \* other than the ones the bar promised it
 
-vars == <<hw, fingers, used, envn, scene, row, mode, dragging, bar, doc, focused, sock, hello,
-          reconnecting, armed, hold, clickMods, down, mac, btn, stale, fresh, bad>>
+vars == <<hw, fingers, used, envn, scene, row, mode, dragging, bar, doc, focused, sock, opened, hello,
+          armed, hold, clickMods, down, mac, btn, stale, fresh, bad>>
 
 \* All variables as one record, so the app's, the page's and voxl's code can be
 \* applied in turn within one step.
 Now == [hw |-> hw, fingers |-> fingers, used |-> used, envn |-> envn, scene |-> scene, row |-> row,
         mode |-> mode, dragging |-> dragging, bar |-> bar, doc |-> doc, focused |-> focused,
-        sock |-> sock, hello |-> hello,
-        reconnecting |-> reconnecting, armed |-> armed, hold |-> hold, clickMods |-> clickMods,
+        sock |-> sock, opened |-> opened, hello |-> hello,
+        armed |-> armed, hold |-> hold, clickMods |-> clickMods,
         down |-> down, mac |-> mac, btn |-> btn, stale |-> stale, fresh |-> fresh, bad |-> bad]
 Set(r) == /\ hw' = r.hw /\ fingers' = r.fingers /\ used' = r.used /\ envn' = r.envn
           /\ scene' = r.scene /\ row' = r.row /\ mode' = r.mode /\ dragging' = r.dragging
           /\ bar' = r.bar /\ doc' = r.doc /\ focused' = r.focused /\ sock' = r.sock
-          /\ hello' = r.hello /\ reconnecting' = r.reconnecting
+          /\ opened' = r.opened /\ hello' = r.hello
           /\ armed' = r.armed /\ hold' = r.hold
           /\ clickMods' = r.clickMods /\ down' = r.down /\ mac' = r.mac /\ btn' = r.btn
           /\ stale' = r.stale /\ fresh' = r.fresh /\ bad' = r.bad
@@ -142,14 +144,15 @@ R                   == [t |-> "r", m |-> None, dn |-> FALSE, src |-> None, want 
 \* (mac/input.rs:340-418): ⌘ is
 \* a flags change, posted only when it changes mods (:341-359); a letter
 \* already pressed is posted again as an autorepeat (:367-371), else pressed;
-\* an up is posted only for a pressed key (:361-365). Esc is pressed and
-\* released at once (voxlTap). b (:259-287): a down or up that matches the
-\* button's state is dropped. r (server.rs:381): release_all.
+\* an up is posted only for a pressed key (:361-365). Esc and a chord's key
+\* are pressed and released at once (voxlTap, voxlChord). b (:259-287): a
+\* down or up that matches the button's state is dropped. r (server.rs:381):
+\* release_all.
 Post(r, s, x) ==
   CASE x.t = "k" /\ x.m = "Cmd" ->
          IF ~x.dn THEN [r EXCEPT !.mac[s]["Cmd"] = Free]
          ELSE [r EXCEPT !.mac[s]["Cmd"] = @ \cup {x.src}]
-    [] x.t = "k" /\ x.m = "esc" -> IF x.dn THEN Judge(r, s, x.want) ELSE r
+    [] x.t = "k" /\ x.m \in {"esc", "chord"} -> IF x.dn THEN Judge(r, s, x.want) ELSE r
     [] x.t = "k" ->
          IF ~x.dn THEN [r EXCEPT !.mac[s][x.m] = Free]
          ELSE Judge([r EXCEPT !.mac[s][x.m] = @ \cup {x.src}], s, x.want)
@@ -175,19 +178,23 @@ KbdUp(r, c)              == IF c \in r.down THEN Send([r EXCEPT !.down = @ \ {c}
                             ELSE r
 KbdReleaseAll(r)         == Send([r EXCEPT !.down = {}], R)
 
-\* Page.input (A Page.swift:74-142). disarm (:87) posts 'armed' [] and the app
-\* clears the bar (A ViewerController.swift:680-681). press and lift (:85-86)
+\* Page.input (A Page.swift:74-151). disarm (:87) posts 'armed' [] and the app
+\* clears the bar (A ViewerController.swift:688-689). press and lift (:85-86)
 \* dispatch the modifiers' keydowns and keyups on #kbd, into keyboard.ts.
 Disarm(r)           == IF r.armed # {} THEN [r EXCEPT !.armed = {}, !.bar = IF Has("ArmedMsg") THEN {} ELSE @]
                        ELSE r
 PressMods(r, m, src) == IF "Cmd" \in m THEN KbdDown(r, "Cmd", src, {}) ELSE r
 LiftMods(r, m)       == IF "Cmd" \in m THEN KbdUp(r, "Cmd") ELSE r
 
-\* letGo (:96): holding's modifiers up, holding null.
+\* letGo (:101): holding's modifiers up, holding null.
 LetGo(r) == IF r.hold.code = None THEN r ELSE [LiftMods(r, r.hold.mods) EXCEPT !.hold = NoHold]
-\* A trusted keydown (:97-102): another key lets go of holding first; while
-\* armed, holding, disarm, the modifiers go down; then keyboard.ts presses the
-\* key (its listener is on #kbd, after the capture listener on document).
+\* A trusted keydown (:104-109; a modifier key returns first, :103, 105: not
+\* modeled, Dan's keys are letters): another key lets go of holding first;
+\* while armed, holding, disarm, the modifiers go down; then keyboard.ts
+\* presses the key (its listener is on #kbd, after the capture listener on
+\* document), and prevents its default (R keyboard.ts:201), so no
+\* beforeinput follows: the beforeinput disarm (:111) is for text with no key,
+\* not modeled.
 KeyIn(r, k, want) ==
   LET r0 == IF r.hold.code # None /\ r.hold.code # k /\ Has("LetGoKey") THEN LetGo(r) ELSE r
       r1 == IF r0.armed = {} THEN r0
@@ -196,14 +203,14 @@ KeyIn(r, k, want) ==
                  IN IF Has("HoldPress") THEN PressMods(r2, m, k) ELSE r2
   IN KbdDown(r1, k, k, want)
 \* The keyup: keyboard.ts releases the key (#kbd, target phase), then the
-\* document's listener lifts holding's modifiers (:103-105, bubble phase).
+\* document's listener lifts holding's modifiers (:112-114, bubble phase).
 KeyOut(r, k) ==
   LET r1 == KbdUp(r, k)
   IN IF r1.hold.code # k THEN r1
      ELSE LET r2 == IF Has("KeyUpLift") THEN LiftMods(r1, r1.hold.mods) ELSE r1
           IN [r2 EXCEPT !.hold = NoHold]
-\* voxlMouse('down') (:113-116): let go of holding, clickMods, disarm, press;
-\* pointerdown sends b,1,1 (R pointer.ts:62-76). voxlMouse('up') (:117-120):
+\* voxlMouse('down') (:122-125): let go of holding, clickMods, disarm, press;
+\* pointerdown sends b,1,1 (R pointer.ts:62-76). voxlMouse('up') (:126-129):
 \* pointerup sends b,1,0 (R pointer.ts:77-85), then lift.
 MouseDown(r, src, want) ==
   LET r0 == IF Has("LetGoClick") THEN LetGo(r) ELSE r
@@ -222,7 +229,16 @@ VoxlTap(r, want) ==
       m  == r0.armed
       r1 == PressMods(Disarm(r0), m, "tap")
   IN LiftMods(Send(r1, K("esc", TRUE, "tap", want)), m)
-\* voxlRelease (:141-142 wrapping :53): disarm, holding and clickMods null,
+\* voxlChord (:95-99), a Mac key from the bar or Paste's ⌘V: let go of
+\* holding; since 5e57a1f its own modifiers and the armed ones, disarm; press,
+\* the key down and up, lift. Its own modifier is ⌘ here, and ⌘ stands for
+\* all four, so the armed ones add nothing: only the disarm shows.
+VoxlChord(r, want) ==
+  LET r0 == LetGo(r)
+      r1 == IF Has("ChordDisarm") THEN Disarm(r0) ELSE r0
+      r2 == PressMods(r1, {"Cmd"}, "tap")
+  IN LiftMods(Send(r2, K("chord", TRUE, "tap", want)), {"Cmd"})
+\* voxlRelease (:150-151 wrapping :53): disarm, holding and clickMods null,
 \* then the window blur that keyboard.ts maps to releaseAll.
 VoxlRelease(r) ==
   LET r1 == IF Has("Disarm") THEN [Disarm(r) EXCEPT !.hold = NoHold, !.clickMods = {}] ELSE r
@@ -231,13 +247,13 @@ VoxlRelease(r) ==
 -----------------------------------------------------------------------------
 (* The app *)
 
-\* release() (A ViewerController.swift:712-715): voxlRelease in the page, the
+\* release() (A ViewerController.swift:720-723): voxlRelease in the page, the
 \* bar's lights off.
 Release(r) ==
   LET r1 == IF r.doc = "page" THEN VoxlRelease(r) ELSE r
   IN IF Has("BarClear") THEN [r1 EXCEPT !.bar = {}] ELSE r1
 
-\* The page in the view goes (newWebView :329-336, closePage :377-389): the
+\* The page in the view goes (newWebView :327-334, closePage :374-386): the
 \* view leaves the window, so the page is hidden and sends r (R main.ts:
 \* 118-121); then it closes and its voxl releases all (R server.rs:287-291).
 \* Assumed: both reach voxl before a new page's first message (that needs a
@@ -247,14 +263,14 @@ Teardown(r) ==
     THEN LET r1 == IF Has("Hidden") THEN Post(r, r.row, R) ELSE r
          IN IF Has("Bye") THEN ReleaseAll(r1, r.row) ELSE r1
     ELSE r
-NewDoc(r, d) == [r EXCEPT !.doc = d, !.sock = "closed", !.armed = {}, !.hold = NoHold, !.clickMods = {},
-                          !.down = {}]
-\* load() (:353-374): a fresh web view if the page committed (or none, :357),
-\* loading; hello false (:362); reconnecting false (:367); the bar's lights
-\* off (:368). A fresh view has no keyboard focus; one kept (still loading,
-\* no commit since its load) stays the first responder if the keyboard
-\* button made it one (it has had no picture).
-Load(r) == [NewDoc(Teardown(r), "blank") EXCEPT !.reconnecting = FALSE, !.hello = FALSE,
+NewDoc(r, d) == [r EXCEPT !.doc = d, !.sock = "closed", !.opened = FALSE, !.armed = {}, !.hold = NoHold,
+                          !.clickMods = {}, !.down = {}]
+\* load() (:351-371): a fresh web view if the page committed (or none, :355),
+\* loading; hello false (:360); the bar's lights off (:365). A fresh view has
+\* no keyboard focus; one kept (still loading, no commit since its load)
+\* stays the first responder if the keyboard button made it one (it has had
+\* no picture).
+Load(r) == [NewDoc(Teardown(r), "blank") EXCEPT !.hello = FALSE,
                                                 !.focused = (r.doc = "blank" /\ r.focused),
                                                 !.bar = IF Has("LoadClearsBar") THEN {} ELSE @]
 
@@ -285,10 +301,11 @@ Init ==
   \* The app in front on screen 1, its page connected (hello and picture
   \* handled, so the view has the keys), nothing held.
   /\ hw = {} /\ fingers = {}
-  /\ used = [press |-> [k \in Letters |-> 0], click |-> 0, drag |-> 0, flip |-> 0, arm |-> 0, tap |-> 0]
+  /\ used = [press |-> [k \in Letters |-> 0], click |-> 0, drag |-> 0, flip |-> 0, arm |-> 0, tap |-> 0,
+             chord |-> 0]
   /\ envn = 0
   /\ scene = "active" /\ row = 1 /\ mode = "trackpad" /\ dragging = FALSE /\ bar = {}
-  /\ doc = "page" /\ focused = TRUE /\ sock = "open" /\ hello = TRUE /\ reconnecting = FALSE
+  /\ doc = "page" /\ focused = TRUE /\ sock = "open" /\ opened = TRUE /\ hello = TRUE
   /\ armed = {} /\ hold = NoHold /\ clickMods = {} /\ down = {}
   /\ mac = [s \in Screens |-> [m \in MacKeys |-> Free]] /\ btn = [s \in Screens |-> Free]
   /\ stale = [s \in Screens |-> FALSE]
@@ -307,7 +324,7 @@ Want == IF fresh THEN bar ELSE {}
 Free1 == Overlap \/ (hw = {} /\ fingers = {})
 
 \* Dan presses a letter. With the app in front it reaches the page's #kbd
-\* once the view has the keyboard focus (focusKeys, :698-704, at the page's
+\* once the view has the keyboard focus (focusKeys, :706-712, at the page's
 \* first picture or from the bar's keyboard button); before that it goes
 \* nowhere.
 KeyDown(k) ==
@@ -343,7 +360,7 @@ DragStart(g) ==
 \* Dan lifts a finger, or lets go of the trackpad's button.
 DragEnd(g) == g \in fingers /\ Set(EndDrag(Now, g))
 
-\* The Trackpad/Direct control on the pad (A ViewerController.swift:137-140),
+\* The Trackpad/Direct control on the pad (A ViewerController.swift:136-139),
 \* with another finger while one drags, or between drags. mode's didSet sends
 \* up if dragging (A Pointer.swift:18-26).
 ModeFlip ==
@@ -351,7 +368,7 @@ ModeFlip ==
   /\ LET r0 == [Now EXCEPT !.mode = IF @ = "trackpad" THEN "direct" ELSE "trackpad", !.used.flip = @ + 1]
      IN Set(IF dragging /\ Has("ModeUp") THEN SendUp(r0) ELSE r0)
 
-\* Dan taps ⌘ on the bar: toggle (A KeyBar.swift:156-161) lights it and arms the
+\* Dan taps ⌘ on the bar: toggle (A KeyBar.swift:157-162) lights it and arms the
 \* page. ArmLoading: also while a page loads under the cover (the bar stays
 \* usable); otherwise only once voxl's page is in the view.
 BarToggle ==
@@ -368,17 +385,34 @@ BarTap ==
          r1 == IF doc = "page" THEN VoxlTap(r0, Want) ELSE r0
      IN Set([r1 EXCEPT !.bar = {}, !.fresh = FALSE])
 
-\* Dan taps the bar's keyboard button, "Show or hide the keyboard" (A
-\* KeyBar.swift:94 -> onKeyboard, ViewerController.swift:149 -> toggleKeyboard,
-\* :706-709 -> focusKeys, :698-704). The bar is beside the cover, not under it
-\* (cover :204, bar :215), so he can tap it while a page loads. focusKeys needs
-\* only a web view (guard let web): the view becomes the first responder, and
-\* voxlKeyboard focuses #kbd if voxl's page is in the view (A Page.swift:54-61);
-\* a page still loading focuses #kbd itself when it starts (R keyboard.ts:287),
-\* so Dan's keys reach it from its commit. Tapped with the focus already there,
-\* it only shows or hides the iPhone keyboard (not modeled).
+\* Dan picks a Mac key from the bar's menu: chord (A KeyBar.swift:151-155)
+\* runs voxlChord and, since 5e57a1f, clears the bar (:154); Paste
+\* (:183-187) does the same through voxlPaste's ⌘V (A Page.swift:142-148;
+\* its paste event and keyboard.ts's delayed ⌘V, R keyboard.ts:195-199, are
+\* not modeled). The key is the next key: it promises its own ⌘ and the
+\* bar's.
+BarChord ==
+  /\ scene = "active" /\ used.chord < Chords /\ Free1
+  /\ LET r0 == [Now EXCEPT !.used.chord = @ + 1]
+         r1 == IF doc = "page" THEN VoxlChord(r0, {"Cmd"} \cup Want) ELSE r0
+     IN Set([r1 EXCEPT !.bar = IF Has("ChordBarClear") THEN {} ELSE @, !.fresh = FALSE])
+
+\* KbLoading: Dan taps the bar's keyboard button, "Show or hide the
+\* keyboard" (A KeyBar.swift:94 -> onKeyboard, ViewerController.swift:147 ->
+\* toggleKeyboard, :714-717 -> focusKeys, :706-712), before the picture gave
+\* the view the keys. The bar is added after the cover, so it is above it
+\* (:102, 148), and beside it: the cover covers only the picture
+\* (cover.frame = f.picture :202, keyBar.frame = f.keys :213; Layout.swift
+\* gives the keys their own strip in every pose, :22-53). So he can tap it
+\* while a page loads. focusKeys needs only a web view (guard let web): the
+\* view becomes the first responder, and voxlKeyboard focuses #kbd if voxl's
+\* page is in the view (A Page.swift:54-61); a page still loading focuses
+\* #kbd itself when it starts (R keyboard.ts:287), so Dan's keys reach it
+\* from its commit (WebKit and UIKit, assumed: see the skill). Tapped with
+\* the focus already there, it only shows or hides the iPhone keyboard (not
+\* modeled).
 KbButton ==
-  /\ scene = "active" /\ doc # "none" /\ ~focused
+  /\ KbLoading /\ scene = "active" /\ doc # "none" /\ ~focused
   /\ Set([Now EXCEPT !.focused = TRUE])
 
 -----------------------------------------------------------------------------
@@ -387,54 +421,54 @@ KbButton ==
 Ev(e) == e \in Events /\ envn < EnvMax
 
 \* The app stops being in front (sceneWillResignActive -> resignedActive,
-\* :761-767): release(). iOS cancels the touches, so every drag ends.
+\* :769-775): release(). iOS cancels the touches, so every drag ends.
 Resign ==
   /\ Ev("leave") /\ scene = "active"
   /\ Set(EndAll([Release(Now) EXCEPT !.scene = "inactive", !.envn = @ + 1]))
 
-\* Back in front (becameActive, :750-759): a new page if closePage ran (with
+\* Back in front (becameActive, :758-767): a new page if closePage ran (with
 \* a picture, focusKeys again: the view has the focus already).
 Activate ==
   /\ scene = "inactive"
   /\ LET r0 == [Now EXCEPT !.scene = "active"] IN Set(IF doc = "none" THEN Load(r0) ELSE r0)
 
-\* The background (enteredBackground, :769-782): the page is hidden and sends
+\* The background (enteredBackground, :777-790): the page is hidden and sends
 \* r (R main.ts:118-121; down is kept).
 Background ==
   /\ scene = "inactive"
   /\ LET r0 == [Now EXCEPT !.scene = "background"]
      IN Set(IF doc = "page" /\ sock = "open" /\ Has("Hidden") THEN Post(r0, row, R) ELSE r0)
 
-\* closeLater or the background task's expiry: closePage (:377-389), the view
+\* closeLater or the background task's expiry: closePage (:374-386), the view
 \* (and its focus) gone.
 ClosePage == scene = "background" /\ doc # "none" /\ Set([NewDoc(Teardown(Now), "none") EXCEPT !.focused = FALSE])
 
 Foreground == scene = "background" /\ Set([Now EXCEPT !.scene = "inactive"])
 
-\* A tab or F1/F2 (go(to:), switched(), :294-309): release(), then load().
+\* A tab or F1/F2 (go(to:), switched(), :292-307): release(), then load().
 Switch ==
   /\ Ev("switch") /\ scene = "active"
   /\ Set([Load(Release(Now)) EXCEPT !.row = Other(row), !.envn = @ + 1])
 
-\* load() with no release(): retry (:434-441), the hello watch (:412-421),
-\* the web process ending (:531-535), Reconnect (:119-122), the cover's button
-\* (:449-467), a changed machine list (:481-496).
+\* load() with no release(): retry (:443-450), the hello watch (:410-421),
+\* the web process ending (:536-540), Reconnect (:117-120), the cover's button
+\* (:458-476), a changed machine list (:490-505).
 Reload == Ev("reload") /\ doc # "none" /\ Set([Load(Now) EXCEPT !.envn = @ + 1])
 
 \* The socket closes and voxl sees it: its read loop ends and it releases all
 \* (R server.rs:258-291). The worker posts status closed (R worker.ts:113-117;
-\* the app: hello false, reconnecting, A ViewerController.swift:664-667) and
-\* reconnects in 1 s.
+\* the app: hello false, A ViewerController.swift:667-672) and reconnects in
+\* 1 s. The app hears the close after the open (opened).
 LossLoud ==
-  /\ Ev("loud") /\ doc = "page" /\ sock = "open"
-  /\ LET r0 == [Now EXCEPT !.sock = "closed", !.hello = FALSE, !.reconnecting = TRUE, !.envn = @ + 1]
+  /\ Ev("loud") /\ doc = "page" /\ sock = "open" /\ opened
+  /\ LET r0 == [Now EXCEPT !.sock = "closed", !.opened = FALSE, !.hello = FALSE, !.envn = @ + 1]
      IN Set(IF Has("Bye") THEN ReleaseAll(r0, row) ELSE r0)
 
 \* The socket stops on the phone only: voxl keeps the connection, and what it
 \* holds (its read loop has no timeout, server.rs:258), until TCP gives up.
 LossSilent ==
-  /\ Ev("silent") /\ doc = "page" /\ sock = "open"
-  /\ Set([Now EXCEPT !.sock = "closed", !.hello = FALSE, !.reconnecting = TRUE, !.stale[row] = TRUE,
+  /\ Ev("silent") /\ doc = "page" /\ sock = "open" /\ opened
+  /\ Set([Now EXCEPT !.sock = "closed", !.opened = FALSE, !.hello = FALSE, !.stale[row] = TRUE,
                      !.envn = @ + 1])
 
 TcpGivesUp(s) ==
@@ -444,34 +478,44 @@ TcpGivesUp(s) ==
 -----------------------------------------------------------------------------
 (* Quick steps *)
 
-\* voxl's page commits in the view (didCommit, :520-529): injected scripts and
+\* voxl's page commits in the view (didCommit, :529-534): injected scripts and
 \* keyboard.ts fresh, the worker connecting.
 Commit == doc = "blank" /\ Set(NewDoc(Now, "page"))
 
-\* The worker's socket opens (R worker.ts:104-112) and posts status open; if it
-\* closed before on this page, the app runs release() on the new socket
-\* (A ViewerController.swift:668-671).
+\* The worker's socket opens (R worker.ts:108-112): it posts status open to
+\* the page, and the page's sends go out from now on (worker.ts:97-99).
 SocketOpen ==
   /\ doc = "page" /\ sock = "closed"
-  /\ LET r0 == [Now EXCEPT !.sock = "open", !.reconnecting = FALSE]
-     IN Set(IF reconnecting /\ Has("ReconnectRelease") THEN Release(r0) ELSE r0)
+  /\ Set([Now EXCEPT !.sock = "open", !.opened = FALSE])
+
+\* Page.watch passes the status on (A Page.swift:35) and the app's status
+\* handler runs, since 5e57a1f on every open (A ViewerController.swift:673-679),
+\* a window blur in the page, which keyboard.ts maps to its releaseAll (R
+\* keyboard.ts:141-145, 285: down cleared, r sent: voxl's release_all lets go
+\* of everything that screen's voxl holds, for every connection, R
+\* server.rs:381, mac/input.rs:420-435). Page.input's armed, holding and
+\* clickMods stay, and so does the bar: its modifiers stay armed across a
+\* reconnect. Dan's taps and keys can reach voxl between SocketOpen and this
+\* step (the status's hops from the worker to the page to the app).
+StatusOpen ==
+  /\ doc = "page" /\ sock = "open" /\ ~opened
+  /\ LET r0 == [Now EXCEPT !.opened = TRUE]
+     IN Set(IF Has("OpenRelease") THEN KbdReleaseAll(r0) ELSE r0)
 
 \* voxl's first message on the new connection is its hello (R server.rs:220);
-\* the worker passes it on (R worker.ts:155-164), Page.watch posts it (A
-\* Page.swift:34), and the app's hello handler (A ViewerController.swift:611-648)
-\* runs, since 04f677a, a window blur in the page (:647), which keyboard.ts maps
-\* to its releaseAll (R keyboard.ts:141-145, 285: down cleared, r sent: voxl's
-\* release_all lets go of everything that screen's voxl holds, for every
-\* connection, R server.rs:381, mac/input.rs:420-435; Page.input's armed,
-\* holding and clickMods stay), then, since ce88951, the bar's lit modifiers
-\* again (keyBar.resend, :648; A KeyBar.swift:164-167: voxlArm if any are lit).
+\* the worker passes it on after its status open (R worker.ts:155-164),
+\* Page.watch posts it (A Page.swift:34), and the app's hello handler (A
+\* ViewerController.swift:618-651) runs, since ce88951, the bar's lit
+\* modifiers again (keyBar.resend, :651; A KeyBar.swift:165-168: voxlArm if
+\* any are lit). Since 5e57a1f the hello lets nothing go: voxl sends it again
+\* when it restarts its stream (not modeled here: it would only arm the lit
+\* modifiers again).
 Hello ==
-  /\ doc = "page" /\ sock = "open" /\ ~hello
+  /\ doc = "page" /\ sock = "open" /\ opened /\ ~hello
   /\ LET r0 == [Now EXCEPT !.hello = TRUE]
-         r1 == IF Has("HelloRelease") THEN KbdReleaseAll(r0) ELSE r0
-     IN Set(IF r1.bar # {} /\ Has("Resend") THEN [r1 EXCEPT !.armed = r1.bar] ELSE r1)
+     IN Set(IF r0.bar # {} /\ Has("Resend") THEN [r0 EXCEPT !.armed = r0.bar] ELSE r0)
 
-Quick == Commit \/ SocketOpen \/ Hello
+Quick == Commit \/ SocketOpen \/ StatusOpen \/ Hello
 
 \* No quick step left: what Dan sees and the Mac holds for more than a moment.
 Settled == ~ENABLED Quick
@@ -481,8 +525,8 @@ Settled == ~ENABLED Quick
 
 \* The page's first frame plays (Page.watch posts picture once per page,
 \* A Page.swift:13-15, 36-38; video is off while the page is hidden, R main.ts:
-\* 108-121): picture (A ViewerController.swift:649-660) runs focusKeys
-\* (:698-704), so the view takes the keyboard focus. Frames follow the hello.
+\* 108-121): picture (A ViewerController.swift:652-663) runs focusKeys
+\* (:706-712), so the view takes the keyboard focus. Frames follow the hello.
 Picture ==
   /\ doc = "page" /\ sock = "open" /\ hello /\ ~focused /\ scene # "background"
   /\ Set([Now EXCEPT !.focused = TRUE])
@@ -491,7 +535,7 @@ Done == Settled /\ UNCHANGED vars
 
 DanStep == \/ \E k \in Letters : KeyDown(k) \/ KeyUp(k)
            \/ Click \/ \E g \in DragKinds : DragStart(g) \/ DragEnd(g)
-           \/ ModeFlip \/ BarToggle \/ BarTap \/ KbButton
+           \/ ModeFlip \/ BarToggle \/ BarTap \/ BarChord \/ KbButton
 World   == \/ Resign \/ Activate \/ Background \/ ClosePage \/ Foreground \/ Switch \/ Reload
            \/ LossLoud \/ LossSilent \/ \E s \in Screens : TcpGivesUp(s)
 
@@ -526,7 +570,7 @@ NoMissingModifier == "missing" \notin bad
 BarShowsArmed == Settled => bar = (IF doc = "page" THEN armed ELSE {})
 
 TypeOK ==
-  /\ hw \subseteq Letters /\ fingers \subseteq DragKinds /\ reconnecting \in BOOLEAN
+  /\ hw \subseteq Letters /\ fingers \subseteq DragKinds /\ opened \in BOOLEAN
   /\ scene \in {"active", "inactive", "background"} /\ row \in Screens
   /\ mode \in {"trackpad", "direct"} /\ dragging \in BOOLEAN /\ bar \subseteq {"Cmd"}
   /\ doc \in {"none", "blank", "page"} /\ focused \in BOOLEAN /\ sock \in {"closed", "open"}
