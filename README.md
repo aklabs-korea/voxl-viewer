@@ -104,11 +104,13 @@ To switch screens:
 - **Tabs**: in a window, a row of tabs along the top shows the machine's screens, the one on show
   lit, with Full | Sharp at the right. Click a tab to switch. Full screen hides the row, so the
   picture keeps the whole monitor.
-- **Keys**: F1 to F9 (on keyboards whose F keys are media keys, Fn+F1, Fn+F2 ...), on a machine
-  with more than one screen and for a screen it has; otherwise the key goes to the remote.
+- **Keys**: F1 to F9 (on keyboards whose F keys are media keys, Fn+F1, Fn+F2 ...), for a screen
+  the machine has; otherwise the key goes to the remote. On a machine with one screen, F1 is for
+  its parts (below).
 - **The edge tab**, in full screen: rest the pointer for a moment in the middle of the window's top
   edge, and a tab slides in with the screen's name. Click it for the panel: the machine's screens,
-  Full | Sharp, Full screen and Settings. Clicking the screen on show connects it again.
+  Full | Sharp, Full screen and Settings. Clicking the screen on show steps its part (below);
+  Reload connects it again.
 
 The tab row and the edge tab never take the keyboard, so typing keeps going to the remote. It doesn't come while a
 mouse button is held, and after a click at the edge, or once it has been left alone, it waits
@@ -127,6 +129,40 @@ example with voxl's `--capture-scale 0.8`). When every screen of a machine has o
 offers **Full | Sharp**. It's one choice for every window. On Windows, Sharp always decodes on
 the graphics card, even when the machine decodes Full on the CPU.
 
+### Part of a screen
+
+A screen's key or tab again shows part of it: **Whole**, **Left half**, **Right half**, then the
+**window** under the remote machine's pointer, then Whole again. The window's title and the note
+in the middle say which. Each screen keeps its part while you look at another. The stream stays
+the same: the app zooms into the picture it already has, so a switch is instant and nobody else
+watching sees a change. The pointer stays in the part: it stops at its edges.
+
+A window part follows the window: moved or resized, the view goes with it; moved to another of
+the machine's screens, that screen comes on show with it; closed or minimized, the screen goes
+back to Whole with a note. A window the remote opens elsewhere stays out of view until you step.
+
+**Fit window** (on unless you turn it off) has the remote give that window this window's shape and
+size: **Large** is one remote pixel per point here, **Fine** one per pixel here, **Medium** in
+between. Where the app has one pixel per point (a Windows monitor at 100%, a Mac screen that isn't
+Retina) they're the same, and the menu offers it as one item, on or off. Stepping on, switching
+screens or closing the window puts the remote's window back where it was, unless someone moved
+or resized it at the remote meanwhile: that change stays. A remote window the app fitted and then
+lost track of (the app crashed, the network went) goes back after a minute.
+
+Halves work with any voxl. The window part needs a voxl that answers these routes on its own
+server, each with an `X-Voxl-Window` header (stock voxl doesn't have them yet; they're refused on
+a `--read-only` voxl):
+
+| Route | Answer |
+| --- | --- |
+| `GET /window/at-pointer` | the window under the pointer, or 204 for none |
+| `GET /window/{id}` | where it is now, `"elsewhere": true` when it's on another display, 404 once it's closed or minimized |
+| `POST /window/{id}/fit` `{"w", "h"}` | that size around the window's middle, kept on its display |
+| `POST /window/{id}/restore` | back where it was, unless it was moved or resized since |
+
+A window is `{"id", "app", "x", "y", "w", "h", "screen": {"w", "h"}}` in the stream's pixels, with
+`"fit": "on"` while it has the size voxl gave it and `"changed"` once someone moved or resized it.
+
 ### Sound
 
 Sound plays only once the page has loaded, while its window is in front and you have used this
@@ -144,12 +180,12 @@ windows share one browser process; CPU decode and Full | Sharp changes navigate 
 
 Mac: the **Machines** menu lists your machines, with **Add Machine…** and **Settings…** for the
 machine in front: its name, screens and Sharp URLs, the tab's edge, and **Remove Machine…**. The
-**View** menu has Reload, voxl's stats overlay and full screen.
+**View** menu has Reload, voxl's stats overlay, Fit Window and full screen.
 
 Windows: click the icon at the top left of the window, or right-click the title bar. That menu
 lists your machines and has **Add machine...**, **Settings...** (the name, the two options above,
 the screens and the tab's edge), **Remove this machine...**, **Add this machine to the Start
-menu**, Full screen, Reload and voxl's stats overlay.
+menu**, Full screen, Reload, voxl's stats overlay and Fit the remote's window.
 
 ### A launcher per machine
 
@@ -211,7 +247,7 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | --- | --- |
 | Cmd+Q | Quits the app |
 | Ctrl+Cmd+F | Full screen on or off |
-| F1 to F9 (Fn+F1 ... on Mac keyboards) | Screen 1 to 9, on a machine with more than one screen and for a screen it has |
+| F1 to F9 (Fn+F1 ... on Mac keyboards) | Screen 1 to 9, for a screen the machine has; the screen on show's key steps its part (F1 on a machine with one screen) |
 | Cmd+V | Pastes your Mac's clipboard on the remote |
 | Other Cmd shortcuts (Cmd+W, Cmd+T, Cmd+R, ...) | Go to the remote |
 | Cmd+Tab, Cmd+Space | Stay with macOS, as in any app |
@@ -222,7 +258,7 @@ remote, and Ctrl on a PC is Cmd on a Mac remote. These apps make sure the keys g
 | --- | --- |
 | Ctrl+W, Ctrl+T, Ctrl+R, F5 and other browser shortcuts | Go to the remote |
 | F11 | Full screen on or off. On keyboards whose F keys are media keys, Fn+F11. The tab's panel also has **Leave full screen**. |
-| F1 to F9 | Screen 1 to 9, on a machine with more than one screen and for a screen it has. On keyboards whose F keys are media keys, Fn+F1, Fn+F2 ... |
+| F1 to F9 | Screen 1 to 9, for a screen the machine has; the screen on show's key steps its part (F1 on a machine with one screen). On keyboards whose F keys are media keys, Fn+F1, Fn+F2 ... |
 | Win, alone or with other keys | With **This is a Mac**: go to the Mac as Control. Otherwise Windows keeps them. |
 | Alt on its own | Goes to the remote (Option on a Mac) instead of opening the window menu |
 | Win+L, Ctrl+Alt+Del | Always stay with Windows |

@@ -54,6 +54,10 @@ sealed record Place(int X, int Y, int Width, int Height, bool Maximized);
 
 enum Side { Top, Left, Bottom, Right }
 
+// While a window shows one of the remote's windows, voxl can resize that window to the viewer's
+// shape: Large is one remote pixel per point here, Fine one per pixel, Medium in between.
+enum FitSize { Off, Large, Medium, Fine }
+
 sealed class Settings
 {
     public List<Machine> Machines { get; set; } = new();
@@ -63,6 +67,8 @@ sealed class Settings
     public Dictionary<string, Place> Windows { get; set; } = new();
     public string? Edge { get; set; } = "top";
     public bool Sharp { get; set; }
+    // Fit window: off, large, medium or fine (Parts.cs).
+    public string? Fit { get; set; }
 
     public static readonly string Dir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "voxl-viewer");
@@ -176,6 +182,7 @@ static class Prefs
 {
     public static Side Edge { get; private set; }
     public static bool Sharp { get; private set; }
+    public static FitSize Fit { get; private set; }
 
     static Prefs()
     {
@@ -188,6 +195,7 @@ static class Prefs
             _ => Side.Top,
         };
         Sharp = settings.Sharp;
+        Fit = Enum.TryParse<FitSize>(settings.Fit, true, out var fit) ? fit : FitSize.Large;
     }
 
     public static void SetEdge(Side side)
@@ -200,6 +208,12 @@ static class Prefs
     {
         Sharp = on;
         Settings.Change(s => s.Sharp = on);
+    }
+
+    public static void SetFit(FitSize fit)
+    {
+        Fit = fit;
+        Settings.Change(s => s.Fit = fit.ToString().ToLowerInvariant());
     }
 }
 

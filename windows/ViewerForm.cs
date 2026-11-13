@@ -2,7 +2,7 @@
 // WebView2, and adds only what a browser tab can't do:
 // - F1..F9, the tab row (ScreenTabs.cs) and, in full screen, a tab at the window's edge
 //   (Switcher.cs) go to the machine's screens, Full or Sharp; a chip in the middle names the
-//   screen while it connects;
+//   screen while it connects; the screen's key or tab again shows part of it (Parts.cs);
 // - WebView2's browser shortcuts are off, so Ctrl+W/T/R/F5 reach the remote machine;
 // - for a Mac, the Win key reaches the page as the Mac's Control key (WinKeys.cs);
 // - F11 is borderless full screen; the window menu (click the icon or right-click the title bar)
@@ -24,6 +24,7 @@ sealed partial class ViewerForm : Form
     // Window-menu commands (Windows keeps the low four bits of WM_SYSCOMMAND for itself).
     const int CmdAdd = 0x1100, CmdSettings = 0x1110, CmdRemove = 0x1120, CmdStartMenu = 0x1130;
     const int CmdFullScreen = 0x1200, CmdReload = 0x1210, CmdStats = 0x1220;
+    const int CmdFit = 0x1300; // CmdFit + 16 * FitSize
     const int CmdMachine = 0x2000, MaxMachines = 200; // CmdMachine + 16 * index
 
     // What the page script below posts once a screen's picture is on, and before each line it
@@ -116,6 +117,7 @@ sealed partial class ViewerForm : Form
         Controls.Add(tabs);
         web.BringToFront(); // docked last: it fills what the tab row leaves
         audioTimer.Tick += (_, _) => UpdateAudio();
+        SetUpParts();
     }
 
     public Machine Machine => machine;
@@ -232,6 +234,7 @@ sealed partial class ViewerForm : Form
             core.WebMessageReceived += OnWebMessage;
             core.ProcessFailed += OnProcessFailed;
             await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(PartScript);
         }
         catch (Exception ex)
         {
@@ -285,10 +288,11 @@ sealed partial class ViewerForm : Form
     {
         row = Math.Clamp(to, 0, machine.Screens.Count - 1);
         retryId++;
+        WatchWindow();
         KeyLog.Write($"{machine.Name} screen {row + 1} ({ShownScreen.Name}){(retry ? " again" : "")}");
         UpdateTitle();
         tabs.Invalidate();
-        if (!retry) chip.Say(ScreenLabel(row), 0);
+        if (!retry) chip.Say(PartLabel, 0);
         if (Core is not { } core) return; // StartView connects once WebView2 is up
         loading = true;
         ShowView();
@@ -300,16 +304,28 @@ sealed partial class ViewerForm : Form
         core.Navigate(WithStats(shownUrl, stats));
     }
 
-    // F1..F9, a tab, or a screen in the switcher's panel. The screen on show only shows its name again.
+    // F1..F9, a tab, or a screen in the switcher's panel: that screen, or the next part of the one on show.
     public void SwitchTo(int to)
     {
         if (to >= machine.Screens.Count) chip.Say($"{machine.Name} has no screen {to + 1}", 1500);
-        else if (to != row) Connect(to);
-        else if (!down && !loading) chip.Say(ScreenLabel(row), 900);
+        else if (to != row)
+        {
+            LeaveWindow();
+            Connect(to);
+        }
+        else Step();
     }
 
     // The ticked screen in the panel, or Reload: the screen on show again, for a stuck picture.
     public void Reconnect() => Connect(row);
+
+    // Fit window is one choice for every window.
+    static void SetFit(FitSize size)
+    {
+        if (size == Prefs.Fit) return;
+        Prefs.SetFit(size);
+        foreach (var window in Program.Windows.ToList()) window.FitChanged();
+    }
 
     // Full | Sharp is one choice for every window; each one whose machine has Sharp streams follows.
     public static void SetSharp(bool on)
@@ -322,6 +338,7 @@ sealed partial class ViewerForm : Form
     // A change from Settings: the machine as saved, and where the screen on show is now.
     public void Apply(Machine now, int nowRow)
     {
+        if (now.Screens[Math.Clamp(nowRow, 0, now.Screens.Count - 1)].Url != ShownScreen.Url) LeaveWindow();
         machine = now;
         row = Math.Clamp(nowRow, 0, now.Screens.Count - 1);
         if (winKeys is not null)
@@ -347,6 +364,7 @@ sealed partial class ViewerForm : Form
     {
         var text = machine.Name;
         if (machine.Screens.Count > 1 || ShownScreen.Name != machine.Name) text += " · " + ShownScreen.Name;
+        if (CurrentPart.Kind != PartKind.Whole) text += " · " + CurrentPart.Name;
         if (machine.HasSharp) text += UsesSharp ? " · Sharp" : " · Full";
         Text = down ? text + " (not answering)" : text;
     }
@@ -389,7 +407,8 @@ sealed partial class ViewerForm : Form
                 else Credentials.Delete(login.Target);
                 pendingLogin = null;
             }
-            if (Loaded(answering: true)) chip.Say(ScreenLabel(row), 0);
+            ShowPart();
+            if (Loaded(answering: true)) chip.Say(PartLabel, 0);
             chip.FadeBy(3000); // sooner when the picture comes (OnWebMessage)
             return;
         }
@@ -526,12 +545,12 @@ sealed partial class ViewerForm : Form
 
     // ------------------------------------------------------------------ keys
 
-    // F1..F9 with nothing else held: the screen of that number, on a machine with more than one
-    // screen and for one it has. Anything else goes on to the remote (F2 renames in Explorer).
+    // F1..F9 with nothing else held: the screen of that number, for one the machine has (F1 alone on a
+    // machine with one screen, for its parts). Anything else goes on to the remote (F2 renames in Explorer).
     // Not in WinKeys' hook: that keeps its own record of the keys held, and one missed release (or
     // Windows dropping a hook it found slow) left Win+Alt+N, then F1..F9, dead until a restart.
     int? SwitchKey(Keys keyData) =>
-        keyData is >= Keys.F1 and <= Keys.F9 && machine.Screens.Count > 1 && keyData - Keys.F1 < machine.Screens.Count
+        keyData is >= Keys.F1 and <= Keys.F9 && keyData - Keys.F1 < machine.Screens.Count
             ? keyData - Keys.F1 : null;
 
     // F1..F9 and F11 reach WebView2 as accelerator keys; handled here, the page never sees them.
@@ -677,6 +696,21 @@ sealed partial class ViewerForm : Form
         AppendMenu(menu, fullScreen ? MF_CHECKED : MF_STRING, CmdFullScreen, "Full screen\tF11");
         AppendMenu(menu, MF_STRING, CmdReload, "Reload");
         AppendMenu(menu, stats ? MF_CHECKED : MF_STRING, CmdStats, "voxl's stats overlay");
+        // While the window shows one of the remote's windows, voxl gives that window this one's shape.
+        // At 100% Large, Medium and Fine are the same size: one item, on or off.
+        AppendMenu(menu, MF_SEPARATOR, 0, null);
+        if (DeviceDpi == 96)
+        {
+            var on = Prefs.Fit != FitSize.Off;
+            AppendMenu(menu, on ? MF_CHECKED : MF_STRING, (nuint)(CmdFit + 16 * (int)(on ? FitSize.Off : FitSize.Large)),
+                "Fit the remote's window to this one");
+        }
+        else
+        {
+            foreach (var size in Enum.GetValues<FitSize>())
+                AppendMenu(menu, size == Prefs.Fit ? MF_CHECKED : MF_STRING, (nuint)(CmdFit + 16 * (int)size),
+                    size == FitSize.Off ? "Fit the remote's window: off" : $"Fit the remote's window: {size}");
+        }
     }
 
     protected override void WndProc(ref Message m)
@@ -700,6 +734,7 @@ sealed partial class ViewerForm : Form
 
     Action? Command(int id)
     {
+        if (id >= CmdFit && id < CmdFit + 16 * 4) return () => SetFit((FitSize)((id - CmdFit) / 16));
         if (id >= CmdMachine && id < CmdMachine + 16 * MaxMachines && (id - CmdMachine) / 16 < menuMachines.Count)
         {
             var chosen = menuMachines[(id - CmdMachine) / 16];
@@ -834,6 +869,7 @@ sealed partial class ViewerForm : Form
     {
         base.OnDpiChanged(e);
         tabs.Sync();
+        FitSoon();
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -870,6 +906,7 @@ sealed partial class ViewerForm : Form
         UpdateAudio();
         chip.Place();
         switcher.HideAll();
+        FitSoon();
     }
 
     protected override void OnMove(EventArgs e)
@@ -906,6 +943,7 @@ sealed partial class ViewerForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        LeaveWindow(wait: true);
         if (!forget) SavePlace();
         base.OnFormClosing(e);
     }
@@ -913,6 +951,8 @@ sealed partial class ViewerForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         audioTimer.Dispose();
+        follow.Dispose();
+        fitLater.Dispose();
         winKeys?.Dispose();
         switcher.Dispose();
         base.OnFormClosed(e);

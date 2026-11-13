@@ -336,13 +336,8 @@ sealed class PanelPane : Slide
         for (var i = 0; i < m.Screens.Count; i++)
         {
             var n = i;
-            // The one on show connects again, for a stuck picture. Decided on the click: a key may
-            // have switched screens while the panel was open.
-            items.Add((i == viewer.Row, (i + 1).ToString(), m.Screens[i].Name, ViewerForm.Shortcut(i), () =>
-            {
-                if (viewer.Row == n) viewer.Reconnect();
-                else viewer.SwitchTo(n);
-            }, false));
+            // The one on show steps to its next part, as its key does (Reload connects it again).
+            items.Add((i == viewer.Row, (i + 1).ToString(), m.Screens[i].Name, ViewerForm.Shortcut(i), () => viewer.SwitchTo(n), false));
         }
         var commands = items.Count;
         if (m.HasSharp) items.Add((false, "", "Full | Sharp", "", null, true));

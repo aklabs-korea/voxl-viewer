@@ -47,6 +47,8 @@ cp "$work/voxl.png" "$work/voxl.iconset/icon_32x32.png"
 iconutil -c icns -o "$app/Contents/Resources/voxl.icns" "$work/voxl.iconset"
 # The licenses travel with the app (the icon's included).
 cp "$root/LICENSE" "$root/CREDITS.md" "$app/Contents/Resources/"
+# The page script every app shares, for showing part of a screen.
+cp "$root/shared/part.js" "$app/Contents/Resources/"
 
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
