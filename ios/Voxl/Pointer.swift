@@ -313,6 +313,11 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
 
     /// The page's #surface follows the zoom; the cursor follows both.
     func apply() {
+        if let picture {
+            let w = picture.bounds.width / k, h = picture.bounds.height / k, a = area
+            origin = CGPoint(x: min(max(a.minX, origin.x), max(a.minX, a.maxX - w)),
+                             y: min(max(a.minY, origin.y), max(a.minY, a.maxY - h)))
+        }
         let kk = k
         run("window.voxlZoom && voxlZoom(\(desk.width * kk), \(desk.height * kk), \(-origin.x * kk), \(-origin.y * kk))")
         place()

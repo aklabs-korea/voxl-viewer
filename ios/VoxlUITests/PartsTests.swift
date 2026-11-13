@@ -33,6 +33,12 @@ final class PartsTests: XCTestCase {
         let add = app.alerts.buttons["Add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         add.tap()
+        // Another machine on view (a simulator that ran GestureTests): pick this one.
+        let machine = app.buttons["Parts"]
+        if !machine.waitForExistence(timeout: 3), let current = app.buttons.allElementsBoundByIndex.first {
+            current.tap()
+            app.buttons["Parts"].tap()
+        }
         expectation(for: NSPredicate(format: "isHittable == false"), evaluatedWith: app.otherElements["cover"])
         waitForExpectations(timeout: 40)
 

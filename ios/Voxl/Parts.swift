@@ -68,11 +68,11 @@ func windowBox(_ j: [String: Any]) -> CGRect? {
     return r.isNull || r.isEmpty ? nil : r
 }
 
-/// voxl's window routes on a screen's voxl (its Full URL: Sharp shows the same display), with the
-/// password this run signed in with. The answer comes on the main queue.
+/// voxl's window routes on the voxl of the page the app plays for a screen (Sharp where it has one: the
+/// same display), with the password this run signed in to it with. The answer comes on the main queue.
 func windowCall(_ screen: Screen, _ path: String, post body: [String: Any]? = nil,
                 _ done: @escaping (Int, [String: Any]) -> Void = { _, _ in }) {
-    guard var c = URLComponents(url: screen.url, resolvingAgainstBaseURL: false) else { return }
+    guard var c = URLComponents(url: screen.page, resolvingAgainstBaseURL: false) else { return }
     let token = c.queryItems?.first { $0.name == "token" }?.value
     c.path = path
     c.query = nil
@@ -108,6 +108,9 @@ final class PartState {
     var turn = 0
     var asking = false
     var fitAsked = Date.distantPast
+    /// The picture's room with the keyboard down, last time the window was fitted to it.
+    var room: CGRect?
+    var refitLater: DispatchWorkItem?
     let note = UILabel()
 }
 
@@ -213,27 +216,45 @@ extension ViewerController {
         }
     }
 
+    /// The picture's room here with the keyboard down: the shape a Mac window is fitted to.
+    var room: CGRect {
+        Layout.frames(size: view.bounds.size, safe: view.safeAreaInsets, fold: fold, keyboardTop: nil,
+                      aspect: pointer.aspect).room
+    }
+
     /// Has voxl give the part's window the shape of the picture's room here (the keyboard down), at the
     /// size chosen.
     func fitWindow() {
         guard FitSize.chosen != .off, let screen, case .window(let id, let app, _) = part else { return }
         parts.fitAsked = Date()
-        let room = Layout.frames(size: view.bounds.size, safe: view.safeAreaInsets, fold: fold, keyboardTop: nil,
-                                 aspect: pointer.aspect).room
+        let room = self.room
+        parts.room = room
         let f = FitSize.chosen.factor(view.window?.screen.scale ?? UIScreen.main.scale)
         let turn = parts.turn
         windowCall(screen, "/window/\(id)/fit",
                    post: ["w": (room.width * f).rounded(), "h": (room.height * f).rounded()]) { [weak self] status, j in
             guard let self, status == 200 else { return }
             guard turn == self.parts.turn else {
-                // Left while voxl fitted it, so the put-back sent on leaving may have come first: again.
-                if self.part.windowID != id { windowCall(screen, "/window/\(id)/restore", post: [:]) }
+                // Left (or the app went to the background) while voxl fitted it, so the put-back sent on
+                // leaving may have come first: again.
+                if self.part.windowID != id || self.parts.follow == nil { windowCall(screen, "/window/\(id)/restore", post: [:]) }
                 return
             }
             guard let box = windowBox(j) else { return }
             self.parts.parts[screen.url.absoluteString] = .window(id: id, app: app, box: box)
             self.pointer.show(box: box)
         }
+    }
+
+    /// Turned, unfolded or (iPad) resized: the window is fitted to the new room once it settles. The
+    /// keyboard coming and going doesn't change it.
+    func refitIfRoomChanged() {
+        guard let old = parts.room, room != old, part.windowID != nil, FitSize.chosen != .off, active else { return }
+        parts.room = room
+        parts.refitLater?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.fitWindow() }
+        parts.refitLater = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     /// Fit window changed.

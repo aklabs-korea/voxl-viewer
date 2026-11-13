@@ -66,7 +66,7 @@ Drop1(q, x) == SelectSeq(q, LAMBDA y : y # x)
 
 VARIABLES
   scene,     \* "active", "inactive", "background", "suspended" (A App.swift:25-28)
-  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:54, 736)
+  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:54, 743)
   row,       \* the screen asked for
   web,       \* a web view exists
   dscr,      \* the screen the view's page was loaded for (loaded, :38)
@@ -123,7 +123,7 @@ Set(r) == /\ scene' = r.scene /\ recent' = r.recent /\ row' = r.row /\ web' = r.
 -----------------------------------------------------------------------------
 (* The app's code *)
 
-\* updateAudio (A ViewerController.swift:740-750): audible = committed &&
+\* updateAudio (A ViewerController.swift:747-757): audible = committed &&
 \* active && recentInput; nothing happens if muted already says so; else the
 \* view's suspension and the page's audio session type. The script call runs
 \* in the view's document now: if voxl's page hasn't committed yet it lands in

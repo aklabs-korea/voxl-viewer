@@ -213,6 +213,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         hint.frame = CGRect(x: 12, y: 10 + controlHeight + 8, width: hintWidth, height: hintHeight)
         keyBar.frame = f.keys
         if resized { pointer.apply() }
+        refitIfRoomChanged()
         if f != laidOutFrames {
             laidOutFrames = f
             let r = { (c: CGRect) in [c.minX, c.minY, c.width, c.height] }
@@ -495,10 +496,16 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     /// there, else the first one; connect again only if what's on view changed.
     func machinesChanged() {
         let before = screen?.page
+        let leaving = (screen, part)
         let name = machine?.name
         machines = Store.machines
         machineIndex = machines.firstIndex { $0.name == name } ?? 0
         row = min(row, max(0, (machine?.screens.count ?? 1) - 1))
+        // Another screen on view now: a window it was fitting goes back.
+        if let s = leaving.0, let id = leaving.1.windowID, screen?.url != s.url {
+            parts.turn += 1
+            windowCall(s, "/window/\(id)/restore", post: [:])
+        }
         updateNav()
         guard machine != nil else {
             closePage()

@@ -83,11 +83,11 @@ VARIABLES
   bar,       \* KeyBar.armed: the lit modifiers (A KeyBar.swift:11, 171-181)
   doc,       \* the web view's document: "none" (closePage), "blank" (loading), "page" (voxl's page)
   focused,   \* the web view is the first responder, so Dan's keys reach the page's #kbd: from
-             \* focusKeys (A ViewerController.swift:709-715), at the page's first picture (:652-657)
+             \* focusKeys (A ViewerController.swift:716-722), at the page's first picture (:652-657)
              \* or the key bar's keyboard button (:714-717); a web view load() makes has none
              \* (:355, 327-349), one it loads again (no commit since) keeps what it had
   sock,      \* the worker's socket: "closed" (it reconnects in 1 s) or "open"
-  opened,    \* the app has handled this socket's status open (A ViewerController.swift:676-682)
+  opened,    \* the app has handled this socket's status open (A ViewerController.swift:683-689)
   hello,     \* the app's hello: voxl's hello on this connection reached it (A ViewerController.swift:41,
              \* 619; cleared by load() :360 and a close :668)
   armed,     \* Page.input's armed (A Page.swift:80)
@@ -179,7 +179,7 @@ KbdUp(r, c)              == IF c \in r.down THEN Send([r EXCEPT !.down = @ \ {c}
 KbdReleaseAll(r)         == Send([r EXCEPT !.down = {}], R)
 
 \* Page.input (A Page.swift:74-160). disarm (:87) posts 'armed' [] and the app
-\* clears the bar (A ViewerController.swift:691-692). press and lift (:85-86)
+\* clears the bar (A ViewerController.swift:698-699). press and lift (:85-86)
 \* dispatch the modifiers' keydowns and keyups on #kbd, into keyboard.ts.
 Disarm(r)           == IF r.armed # {} THEN [r EXCEPT !.armed = {}, !.bar = IF Has("ArmedMsg") THEN {} ELSE @]
                        ELSE r
@@ -247,7 +247,7 @@ VoxlRelease(r) ==
 -----------------------------------------------------------------------------
 (* The app *)
 
-\* release() (A ViewerController.swift:723-726): voxlRelease in the page, the
+\* release() (A ViewerController.swift:730-733): voxlRelease in the page, the
 \* bar's lights off.
 Release(r) ==
   LET r1 == IF r.doc = "page" THEN VoxlRelease(r) ELSE r
@@ -457,7 +457,7 @@ Reload == Ev("reload") /\ doc # "none" /\ Set([Load(Now) EXCEPT !.envn = @ + 1])
 
 \* The socket closes and voxl sees it: its read loop ends and it releases all
 \* (R server.rs:261-294). The worker posts status closed (R worker.ts:113-117;
-\* the app: hello false, A ViewerController.swift:670-675) and reconnects in
+\* the app: hello false, A ViewerController.swift:677-682) and reconnects in
 \* 1 s. The app hears the close after the open (opened).
 LossLoud ==
   /\ Ev("loud") /\ doc = "page" /\ sock = "open" /\ opened
@@ -489,7 +489,7 @@ SocketOpen ==
   /\ Set([Now EXCEPT !.sock = "open", !.opened = FALSE])
 
 \* Page.watch passes the status on (A Page.swift:35) and the app's status
-\* handler runs, since 5e57a1f on every open (A ViewerController.swift:676-682),
+\* handler runs, since 5e57a1f on every open (A ViewerController.swift:683-689),
 \* a window blur in the page, which keyboard.ts maps to its releaseAll (R
 \* keyboard.ts:141-145, 285: down cleared, r sent: voxl's release_all lets go
 \* of everything that screen's voxl holds, for every connection, R
@@ -505,7 +505,7 @@ StatusOpen ==
 \* voxl's first message on the new connection is its hello (R server.rs:223);
 \* the worker passes it on after its status open (R worker.ts:155-164),
 \* Page.watch posts it (A Page.swift:34), and the app's hello handler (A
-\* ViewerController.swift:624-654) runs, since ce88951, the bar's lit
+\* ViewerController.swift:631-661) runs, since ce88951, the bar's lit
 \* modifiers again (keyBar.resend, :651; A KeyBar.swift:165-168: voxlArm if
 \* any are lit). Since 5e57a1f the hello lets nothing go: voxl sends it again
 \* when it restarts its stream (not modeled here: it would only arm the lit
@@ -525,7 +525,7 @@ Settled == ~ENABLED Quick
 
 \* The page's first frame plays (Page.watch posts picture once per page,
 \* A Page.swift:13-15, 36-38; video is off while the page is hidden, R main.ts:
-\* 108-121): picture (A ViewerController.swift:655-666) runs focusKeys
+\* 108-121): picture (A ViewerController.swift:662-673) runs focusKeys
 \* (:706-712), so the view takes the keyboard focus. Frames follow the hello.
 Picture ==
   /\ doc = "page" /\ sock = "open" /\ hello /\ ~focused /\ scene # "background"
