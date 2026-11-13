@@ -134,11 +134,20 @@ enum Page {
         s.dispatchEvent(new WheelEvent('wheel', { clientX: r.left + x * r.width, clientY: r.top + y * r.height,
           deltaX: dx, deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }));
       };
-      window.voxlZoom = (z, tx, ty) => {
-        const s = surface(); if (!s) return;
+      // The whole desktop at w × h points with its top-left at (x, y) on the view: #surface is moved and
+      // scaled there from wherever voxl laid it out (voxl fits the desktop into the view, which has the
+      // shape of the part on view), and again whenever voxl lays the page out again.
+      let zoomTo = null;
+      const zoom = () => {
+        const s = surface(); if (!s || !zoomTo) return;
+        const W = s.offsetWidth, H = s.offsetHeight; if (!W || !H) return;
+        const [w, h, x, y] = zoomTo, tx = x - s.offsetLeft, ty = y - s.offsetTop;
+        const same = Math.abs(w / W - 1) < 0.002 && Math.abs(h / H - 1) < 0.002 && Math.abs(tx) < 0.5 && Math.abs(ty) < 0.5;
         s.style.transformOrigin = '0 0';
-        s.style.transform = z === 1 ? '' : `translate(${tx}px, ${ty}px) scale(${z})`;
+        s.style.transform = same ? '' : `translate(${tx}px, ${ty}px) scale(${w / W}, ${h / H})`;
       };
+      window.voxlZoom = (w, h, x, y) => { zoomTo = [w, h, x, y]; zoom(); };
+      addEventListener('resize', () => requestAnimationFrame(zoom));
       window.voxlPaste = (text) => {
         const k = kbd(); if (!k) return;
         const dt = new DataTransfer();
@@ -152,6 +161,7 @@ enum Page {
       // The Mac's pointer image, which voxl shows as a CSS cursor (touch screens draw none): the app draws it.
       addEventListener('DOMContentLoaded', () => {
         const s = surface(); if (!s) return;
+        if (window.ResizeObserver) new ResizeObserver(zoom).observe(s);
         let last = '';
         new MutationObserver(() => {
           const c = s.style.cursor || '';

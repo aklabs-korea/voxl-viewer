@@ -135,6 +135,106 @@ enum Edge: String, CaseIterable {
 /// Full or Sharp, for every machine: true loads each screen's Sharp URL.
 var sharpChosen: Bool { defaults.bool(forKey: "sharp") }
 
+/// What a window shows of its screen. The screen's key (or its tab) again steps Whole, Left, Right,
+/// the window under the remote's pointer, Whole. The stream stays the same: the page zooms into it
+/// (shared/part.js).
+enum Part {
+    case whole, left, right
+    /// One of the remote's windows; box is where it is, as fractions of the screen.
+    case window(id: UInt64, app: String, box: [Double])
+
+    /// The part as fractions of the screen [x, y, w, h], nil for all of it.
+    var box: [Double]? {
+        switch self {
+        case .whole: return nil
+        case .left: return [0, 0, 0.5, 1]
+        case .right: return [0.5, 0, 0.5, 1]
+        case .window(_, _, let box): return box
+        }
+    }
+
+    var windowID: UInt64? { if case .window(let id, _, _) = self { return id } else { return nil } }
+
+    var name: String {
+        switch self {
+        case .whole: return "Whole"
+        case .left: return "Left half"
+        case .right: return "Right half"
+        case .window(_, let app, _): return app.isEmpty ? "Window" : app
+        }
+    }
+}
+
+/// While a window shows one of the remote's windows, voxl can resize that window to the viewer's shape:
+/// Large is one remote pixel per point here, Fine one per pixel here, Medium in between. With one
+/// pixel per point here they're all the same, and the menu offers only On and Off.
+enum FitSize: String, CaseIterable {
+    case off, large, medium, fine
+
+    static var chosen: FitSize { FitSize(rawValue: defaults.string(forKey: "fit") ?? "") ?? .large }
+
+    /// Remote pixels per point here, for a screen with k pixels per point.
+    func factor(_ k: CGFloat) -> CGFloat {
+        switch self {
+        case .off, .large: return 1
+        case .medium: return k.squareRoot()
+        case .fine: return k
+        }
+    }
+}
+
+/// The part's window from voxl's answer: where it is, as fractions of the screen, cut to the screen.
+func windowBox(_ j: [String: Any]) -> [Double]? {
+    guard let x = (j["x"] as? NSNumber)?.doubleValue, let y = (j["y"] as? NSNumber)?.doubleValue,
+          let w = (j["w"] as? NSNumber)?.doubleValue, let h = (j["h"] as? NSNumber)?.doubleValue,
+          let screen = j["screen"] as? [String: Any], let sw = (screen["w"] as? NSNumber)?.doubleValue,
+          let sh = (screen["h"] as? NSNumber)?.doubleValue, sw > 0, sh > 0 else { return nil }
+    let x0 = max(0, x / sw), y0 = max(0, y / sh), x1 = min(1, (x + w) / sw), y1 = min(1, (y + h) / sh)
+    return x1 > x0 && y1 > y0 ? [x0, y0, x1 - x0, y1 - y0] : nil
+}
+
+/// voxl's window routes on a screen's voxl (the page's own server): which window is under the pointer,
+/// where one is, and fitting it to this window and putting it back. The answer comes on the main queue,
+/// or (wait) before this returns, in at most a second.
+func windowCall(_ page: URL, _ path: String, post body: [String: Any]? = nil, wait: Bool = false,
+                _ done: @escaping (Int, [String: Any]) -> Void = { _, _ in }) {
+    guard var c = URLComponents(url: page, resolvingAgainstBaseURL: false) else { return }
+    let token = c.queryItems?.first { $0.name == "token" }?.value
+    c.path = path
+    c.query = nil
+    c.fragment = nil
+    guard let url = c.url else { return }
+    var r = URLRequest(url: url, timeoutInterval: wait ? 1 : 3)
+    r.setValue("1", forHTTPHeaderField: "X-Voxl-Window")
+    let scheme = c.scheme ?? ""
+    if let token {
+        r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    } else if let login = signedIn["\(scheme)://\(c.host ?? ""):\(c.port ?? (scheme == "https" ? 443 : 80))"],
+              let user = login.user, let password = login.password {
+        r.setValue("Basic " + Data("\(user):\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
+    }
+    if let body {
+        r.httpMethod = "POST"
+        r.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    }
+    let finished = DispatchSemaphore(value: 0)
+    URLSession.shared.dataTask(with: r) { data, response, _ in
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        if wait {
+            finished.signal()
+        } else {
+            DispatchQueue.main.async { done(status, json) }
+        }
+    }.resume()
+    if wait { _ = finished.wait(timeout: .now() + 1) }
+}
+
+/// The page script that shows a part of the screen (shared/part.js, in the app's resources).
+let partScript = Bundle.main.url(forResource: "part", withExtension: "js")
+    .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+
 /// The viewer's key for a screen: F and its number (Fn+F1 ... where the F keys are media keys).
 func shortcut(_ row: Int) -> String { "F\(row + 1)" }
 
@@ -773,6 +873,13 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     /// The Mac clipboard's change count when the window left, or after the viewer's own last write:
     /// any other count means something was copied on the Mac since.
     var ownChange = 0
+    /// Each screen's part, by its URL: what it shows when it's on view again.
+    var parts: [URL: Part] = [:]
+    /// While the part is a window: asks its voxl where it is, twice a second.
+    var follow: Timer?
+    /// Bumped by every change of screen or part: answers to questions asked before are dropped.
+    var partTurn = 0
+    var fitLater: DispatchWorkItem?
 
     init(machine: Machine, onClose: @escaping (MachineWindow) -> Void) {
         self.machine = machine
@@ -812,7 +919,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
           };
         })();
         """
-        for source in [bridge, pictureWatch] {
+        for source in [bridge, pictureWatch, partScript] {
             config.userContentController.addUserScript(
                 WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
@@ -839,8 +946,17 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     var screen: Screen { machine.screens[row] }
-    var label: String { "\(row + 1) · \(screen.name)" }
+    var label: String {
+        let base = "\(row + 1) · \(screen.name)"
+        if case .whole = part { return base }
+        return "\(base) · \(part.name)"
+    }
     var sharp: Bool { sharpChosen && machine.hasSharp }
+    var part: Part { parts[screen.url] ?? .whole }
+
+    /// Screen r's voxl for the window routes: its Full URL, whichever is on view. A Sharp stream shows
+    /// the same display, and one voxl keeps track of a fitted window across a switch.
+    func page(_ r: Int) -> URL { machine.screens[r].url }
 
     /// The page for the screen on view: its Sharp or Full URL, with voxl's stats overlay if it's on.
     var pageURL: URL {
@@ -885,6 +1001,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     func load() {
         retryLater?.cancel()
         retryLater = nil
+        watchWindow()
         if committed { newWebView() }
         let url = pageURL
         loaded = url
@@ -942,20 +1059,172 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         load()
     }
 
-    /// F1..F9 or a tab: screen N, or its name again if it's the one on view.
+    /// F1..F9, a tab or a row of the panel: screen N, or the next part of the one on view.
     func go(to n: Int) {
         switcher.hide()
         guard n < machine.screens.count else { return flash("\(machine.name) has no screen \(n + 1)") }
-        if n == row { return flash(label) }
+        if n == row { return step() }
+        leaveWindow()
         row = n
         reconnect()
     }
 
-    /// A row of the panel: another screen, or the one on view connected again (for a stuck picture).
-    func choose(_ n: Int) {
-        guard n < machine.screens.count else { return }
-        row = n
-        reconnect()
+    func choose(_ n: Int) { go(to: n) }
+
+    // MARK: Parts of the screen
+
+    /// The screen's key or tab again: Whole, Left, Right, the window under the remote's pointer, Whole.
+    func step() {
+        switch part {
+        case .whole: setPart(.left)
+        case .left: setPart(.right)
+        case .right: pickWindow()
+        case .window: setPart(.whole)
+        }
+    }
+
+    /// Shows part p of the screen on view, and says so (or note).
+    func setPart(_ p: Part, note: String? = nil) {
+        if let id = part.windowID, id != p.windowID { leaveWindow() }
+        parts[screen.url] = p
+        showPart()
+        flash(note ?? label, for: note == nil ? 1.2 : 3)
+        updateTitle()
+        watchWindow()
+    }
+
+    /// The page zooms to the part (shared/part.js).
+    func showPart() {
+        let box = part.box.map { "[" + $0.map { String($0) }.joined(separator: ",") + "]" } ?? "null"
+        web.evaluateJavaScript("window.voxlPart && voxlPart(\(box))", completionHandler: nil)
+    }
+
+    /// The window under the remote's pointer becomes the part; with none, the whole screen.
+    func pickWindow() {
+        let turn = partTurn
+        windowCall(page(row), "/window/at-pointer") { [weak self] status, j in
+            guard let self, turn == self.partTurn else { return }
+            let app = j["app"] as? String ?? ""
+            guard status == 200, let id = (j["id"] as? NSNumber)?.uint64Value else {
+                return self.setPart(.whole, note: status == 204 ? "No window under the pointer: whole screen"
+                                    : "\(self.screen.name) can't show one window: whole screen")
+            }
+            if j["elsewhere"] as? Bool == true { return self.findWindow(id, app: app) }
+            guard let box = windowBox(j) else { return self.setPart(.whole) }
+            self.setPart(.window(id: id, app: app, box: box))
+        }
+    }
+
+    /// While the part is a window: fits it, and asks where it is twice a second.
+    func watchWindow() {
+        partTurn += 1
+        follow?.invalidate()
+        follow = nil
+        fitLater?.cancel()
+        guard part.windowID != nil else { return }
+        fitWindow()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.askWhere() }
+        RunLoop.main.add(timer, forMode: .common)
+        follow = timer
+    }
+
+    /// The view follows the window. Moved to another of the machine's screens, that screen comes on
+    /// view showing it; closed or minimized, the whole screen.
+    func askWhere() {
+        guard !asking, case .window(let id, let app, let box) = part else { return }
+        let turn = partTurn, url = screen.url
+        asking = true
+        windowCall(page(row), "/window/\(id)") { [weak self] status, j in
+            self?.asking = false
+            guard let self, turn == self.partTurn else { return }
+            if status == 404 {
+                return self.setPart(.whole, note: "\(app.isEmpty ? "The window" : app) closed or minimized: whole screen")
+            }
+            guard status == 200 else { return } // voxl restarting or offline: ask again
+            if j["elsewhere"] as? Bool == true { return self.findWindow(id, app: app) }
+            if let now = windowBox(j), now != box {
+                self.parts[url] = .window(id: id, app: app, box: now)
+                self.showPart()
+            }
+            // Not fitted (yet, or any more, after a while unasked): fit it. Moved or resized at the
+            // remote ("changed"), it stays as it is.
+            let fit = j["fit"] as? String
+            if FitSize.chosen != .off, fit == nil, -self.fitAsked.timeIntervalSinceNow > 5 { self.fitWindow() }
+            if FitSize.chosen == .off, fit == "on" { windowCall(self.page(self.row), "/window/\(id)/restore", post: [:]) }
+        }
+    }
+
+    var fitAsked = Date.distantPast
+    /// A question about the window is on its way: the next waits for its answer.
+    var asking = false
+
+    /// Has voxl give the part's window this window's shape, at the size chosen (FitSize).
+    func fitWindow() {
+        guard FitSize.chosen != .off, case .window(let id, let app, _) = part else { return }
+        fitAsked = Date()
+        let f = FitSize.chosen.factor(window.backingScaleFactor), size = content.bounds.size
+        let turn = partTurn, url = screen.url
+        let api = page(row)
+        windowCall(api, "/window/\(id)/fit",
+                   post: ["w": (size.width * f).rounded(), "h": (size.height * f).rounded()]) { [weak self] status, j in
+            guard let self, status == 200 else { return }
+            guard turn == self.partTurn else {
+                // Left while voxl fitted it, so the put-back sent on leaving may have come first: again.
+                if self.part.windowID != id { windowCall(api, "/window/\(id)/restore", post: [:]) }
+                return
+            }
+            guard let box = windowBox(j) else { return }
+            self.parts[url] = .window(id: id, app: app, box: box)
+            self.showPart()
+        }
+    }
+
+    /// After this window changes size: fits again, once it has settled.
+    func fitSoon() {
+        fitLater?.cancel()
+        guard part.windowID != nil, FitSize.chosen != .off else { return }
+        let work = DispatchWorkItem { [weak self] in self?.fitWindow() }
+        fitLater = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// Fit Window changed, here or in another copy of the app.
+    func fitChanged() {
+        guard let id = part.windowID else { return }
+        if FitSize.chosen == .off { windowCall(page(row), "/window/\(id)/restore", post: [:]) } else { fitWindow() }
+    }
+
+    /// The part's window moved to another of the machine's screens: that screen, showing it.
+    func findWindow(_ id: UInt64, app: String) {
+        let turn = partTurn
+        let others = machine.screens.indices.filter { $0 != row }
+        func next(_ i: Int) {
+            guard i < others.count else {
+                return setPart(.whole, note: "\(app.isEmpty ? "The window" : app) is on a screen not in this window: whole screen")
+            }
+            let r = others[i]
+            windowCall(page(r), "/window/\(id)") { [weak self] status, j in
+                guard let self, turn == self.partTurn else { return }
+                guard status == 200, j["elsewhere"] as? Bool != true, let box = windowBox(j) else { return next(i + 1) }
+                self.leaveWindow()
+                self.parts[self.screen.url] = .whole
+                self.parts[self.machine.screens[r].url] = .window(id: id, app: app, box: box)
+                self.row = r
+                self.reconnect()
+            }
+        }
+        next(0)
+    }
+
+    /// Stops following the part's window and has voxl put it back, unless it was moved or resized at
+    /// the remote since. The screen keeps its part for when it's on view again.
+    func leaveWindow(wait: Bool = false) {
+        follow?.invalidate()
+        follow = nil
+        fitLater?.cancel()
+        partTurn += 1
+        guard let id = part.windowID else { return }
+        windowCall(page(row), "/window/\(id)/restore", post: [:], wait: wait)
     }
 
     /// A change from Settings, saved at once. The screen on view connects again only if its address
@@ -967,6 +1236,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     /// The machine as it now is, on screen r (nil: the one on view is gone, so the first).
     func show(_ m: Machine, viewing r: Int?) {
+        if m.screens[min(r ?? 0, m.screens.count - 1)].url != screen.url { leaveWindow() }
         machine = m
         row = min(r ?? 0, m.screens.count - 1)
         switcher.hide()
@@ -993,10 +1263,11 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     /// "M3 · top · Sharp": the machine, the screen (left out when it's the only one and named the
     /// same) and Full or Sharp when the machine has the choice.
     func updateTitle() {
-        var parts = [machine.name]
-        if machine.screens.count > 1 || screen.name != machine.name { parts.append(screen.name) }
-        if machine.hasSharp { parts.append(sharp ? "Sharp" : "Full") }
-        window.title = parts.joined(separator: " · ")
+        var words = [machine.name]
+        if machine.screens.count > 1 || screen.name != machine.name { words.append(screen.name) }
+        if case .whole = part {} else { words.append(part.name) }
+        if machine.hasSharp { words.append(sharp ? "Sharp" : "Full") }
+        window.title = words.joined(separator: " · ")
         settings?.retitle()
         updateTabs()
     }
@@ -1058,7 +1329,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         chip.show(text)
     }
 
-    func flash(_ text: String) {
+    func flash(_ text: String, for seconds: Double = 1.2) {
         flashLater?.cancel()
         chip.show(text)
         let work = DispatchWorkItem { [weak self] in
@@ -1066,17 +1337,16 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
             self.chip.show(self.chipText)
         }
         flashLater = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     /// Each key event of this window before the page gets it (nil: it stops here).
     func key(_ e: NSEvent) -> NSEvent? {
         if typedByVoxl(e) { return nil }
         let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
-        // F1..F9 with nothing else held, on a machine with more than one screen and for one it has;
-        // otherwise the key goes on to the remote.
-        if e.type == .keyDown, mods.isEmpty, let n = fKeys[e.keyCode], machine.screens.count > 1,
-           n < machine.screens.count {
+        // F1..F9 with nothing else held, for a screen the machine has (F1 alone on a machine with one
+        // screen, for its parts); otherwise the key goes on to the remote.
+        if e.type == .keyDown, mods.isEmpty, let n = fKeys[e.keyCode], n < machine.screens.count {
             eaten = e.keyCode
             if !e.isARepeat { go(to: n) }
             return nil
@@ -1119,6 +1389,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         guard w === web else { return }
         answered = true
         committed = true
+        showPart()
         updateAudio()
         window.subtitle = ""
         if failing {
@@ -1281,7 +1552,12 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
         heldClip = nil
     }
 
-    func windowDidResize(_ note: Notification) { switcher.hide() }
+    func windowDidResize(_ note: Notification) {
+        switcher.hide()
+        fitSoon()
+    }
+
+    func windowDidChangeBackingProperties(_ note: Notification) { fitSoon() }
     func windowDidMiniaturize(_ note: Notification) { updateAudio() }
     func windowDidDeminiaturize(_ note: Notification) { updateAudio() }
 
@@ -1298,6 +1574,7 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     func windowWillClose(_ note: Notification) {
+        leaveWindow(wait: true)
         // Let the web view go, so the stream stops with the window.
         web.mutePage(true)
         retryLater?.cancel()
@@ -1311,6 +1588,12 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     @objc func reloadMachine(_ sender: Any?) { reconnect() }
+
+    /// View > Fit Window, for every window (each one catches up through the defaults' observer).
+    @objc func pickFit(_ item: NSMenuItem) {
+        guard let size = item.representedObject as? String else { return }
+        defaults.set(size, forKey: "fit")
+    }
     @objc func toggleVoxlStats(_ sender: Any?) { stats.toggle(); reconnect() }
 
     @objc func openSettings(_ sender: Any?) {
@@ -1320,6 +1603,13 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleVoxlStats(_:)) { item.state = stats ? .on : .off }
+        if item.action == #selector(pickFit(_:)), let size = item.representedObject as? String {
+            // With one pixel per point here, Large, Medium and Fine are the same size: On or Off.
+            let sharp = window.backingScaleFactor > 1
+            item.isHidden = !sharp && (size == FitSize.medium.rawValue || size == FitSize.fine.rawValue)
+            item.title = size == FitSize.off.rawValue ? "Off" : sharp ? size.capitalized : "On"
+            item.state = FitSize.chosen.rawValue == size ? .on : .off
+        }
         return true
     }
 }
@@ -1699,7 +1989,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watchInput()
         watchAudio()
         // Other copies of the app (each launcher is one) and seeds change these too.
-        for key in ["machineList", "sharp"] { defaults.addObserver(self, forKeyPath: key, options: [], context: nil) }
+        for key in ["machineList", "sharp", "fit"] { defaults.addObserver(self, forKeyPath: key, options: [], context: nil) }
         if let m = launchMachine() ?? lastMachine() {
             open(m)
         } else {
@@ -1720,12 +2010,18 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DistributedNotificationCenter.default().removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         windows.forEach { $0.settings?.window.makeFirstResponder(nil) }
+        windows.forEach { $0.leaveWindow(wait: true) }
     }
 
     /// The machines or Full | Sharp changed, in this copy of the app or another: each window catches up.
     override func observeValue(forKeyPath key: String?, of object: Any?, change: [NSKeyValueChangeKey: Any]?,
                                context: UnsafeMutableRawPointer?) {
-        DispatchQueue.main.async { self.windows.forEach { $0.reread() } }
+        DispatchQueue.main.async {
+            self.windows.forEach {
+                $0.reread()
+                if key == "fit" { $0.fitChanged() }
+            }
+        }
     }
 
     /// Keys and mouse go through the window in front first: its shortcuts, and its edge tab.
@@ -1918,9 +2214,18 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
         ])
+        // While a window shows one of the remote's windows, voxl gives that window this one's shape.
+        let fit = NSMenuItem(title: "Fit Window", action: nil, keyEquivalent: "")
+        fit.submenu = NSMenu(title: "Fit Window")
+        for size in FitSize.allCases {
+            let i = item(size.rawValue.capitalized, #selector(MachineWindow.pickFit(_:)), "", [])
+            i.representedObject = size.rawValue
+            fit.submenu?.addItem(i)
+        }
         _ = menu("View", [
             item("Reload", #selector(MachineWindow.reloadMachine(_:))),
             item("Show voxl's stats", #selector(MachineWindow.toggleVoxlStats(_:))),
+            fit,
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
         ])
         NSApp.windowsMenu = menu("Window", [item("Minimize", #selector(NSWindow.performMiniaturize(_:)))])
@@ -1939,6 +2244,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// prompt once (and saves it in the Keychain, as a user who leaves Save ticked), then cancels.
     func selfTest() {
         guard let w = windows.first else { return }
+        if env["VOXL_VIEWER_SELFTEST"] == "parts" { return partsTest(w) }
         let recorder = """
         window.__keys = []; window.__pastes = [];
         addEventListener('keydown', e => __keys.push((e.metaKey ? 'cmd+' : '') + e.key), true);
@@ -1997,6 +2303,69 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+    }
+}
+
+extension App {
+    /// VOXL_VIEWER_SELFTEST=parts with a URL argument (a voxl that may be driven, with the window
+    /// routes, its pointer over a window that may be resized): presses the screen's key four times as a
+    /// user would and checks Left, Right, the window under the pointer fitted to this window, and Whole
+    /// with the window put back. Quits with status 1 if anything failed.
+    func partsTest(_ w: MachineWindow) {
+        let surface = "(() => { const s = document.getElementById('surface'); return s.style.transform + '|' + s.style.clipPath })()"
+        func press() {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                                            timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: w.window.windowNumber, context: nil, characters: "\u{F704}",
+                                            charactersIgnoringModifiers: "\u{F704}", isARepeat: false, keyCode: 122) {
+                    // Into the window's key handling, as the key monitor hands it a key when the window
+                    // is in front (a test started from a shell may not bring it there).
+                    _ = w.key(e)
+                }
+            }
+        }
+        func after(_ s: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
+        func done() {
+            print(selfTestFailed ? "parts test FAILED" : "parts test passed")
+            exit(selfTestFailed ? 1 : 0)
+        }
+        func js(_ f: @escaping (String) -> Void) { w.web.evaluateJavaScript(surface) { r, _ in f(r as? String ?? "") } }
+        press()
+        after(1) { js { s in
+            self.check("F1 again: left half", w.window.title.contains("Left half") && s.contains("inset(0px"), s)
+            press()
+            after(1) { js { s in
+                self.check("F1 again: right half", w.window.title.contains("Right half") && s.contains("scale("), s)
+                windowCall(w.page(w.row), "/window/at-pointer") { status, before in
+                    self.check("the remote has a window under its pointer", status == 200, status)
+                    press()
+                    after(2) {
+                        guard let id = w.part.windowID else {
+                            self.check("F1 again: the window under the pointer", false, w.window.title)
+                            return done()
+                        }
+                        windowCall(w.page(w.row), "/window/\(id)") { _, j in
+                            let want = w.content.bounds.width * FitSize.chosen.factor(w.window.backingScaleFactor)
+                            let got = (j["w"] as? NSNumber)?.doubleValue ?? 0
+                            self.check("F1 again: the window, fitted to this window",
+                                       j["fit"] as? String == "on" && abs(got - want) < 24, j)
+                            press()
+                            after(1.5) {
+                                windowCall(w.page(w.row), "/window/\(id)") { _, j in
+                                    let back = ["x", "y", "w", "h"].allSatisfy { j[$0] as? NSNumber == before[$0] as? NSNumber }
+                                    self.check("F1 again: whole screen, the window put back", j["fit"] == nil && back, j)
+                                    js { s in
+                                        self.check("the page shows the whole screen", s == "|", s)
+                                        done()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } }
+        } }
     }
 }
 

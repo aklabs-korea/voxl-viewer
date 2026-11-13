@@ -26,6 +26,8 @@
   <ItemGroup>
     <!-- Pinned. Windows keeps the WebView2 runtime itself up to date. -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+    <!-- The page script every app shares, for showing part of a screen. -->
+    <EmbeddedResource Include="..\shared\part.js" LogicalName="part.js" />
   </ItemGroup>
 
   <!-- The package always references its WPF control too, which pulls in a second WindowsBase. -->

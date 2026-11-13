@@ -79,16 +79,16 @@ VARIABLES
   scene,     \* "active", "inactive", "background" (sceneDidBecomeActive and the rest, A App.swift:25-28)
   row,       \* the screen on show
   mode,      \* Pointer.mode: "trackpad" or "direct" (A Pointer.swift:18-26)
-  dragging,  \* Pointer.dragging, one flag for every drag (A Pointer.swift:44)
+  dragging,  \* Pointer.dragging, one flag for every drag (A Pointer.swift:46)
   bar,       \* KeyBar.armed: the lit modifiers (A KeyBar.swift:11, 171-181)
   doc,       \* the web view's document: "none" (closePage), "blank" (loading), "page" (voxl's page)
   focused,   \* the web view is the first responder, so Dan's keys reach the page's #kbd: from
-             \* focusKeys (A ViewerController.swift:706-712), at the page's first picture (:652-657)
+             \* focusKeys (A ViewerController.swift:716-722), at the page's first picture (:652-657)
              \* or the key bar's keyboard button (:714-717); a web view load() makes has none
              \* (:355, 327-349), one it loads again (no commit since) keeps what it had
   sock,      \* the worker's socket: "closed" (it reconnects in 1 s) or "open"
-  opened,    \* the app has handled this socket's status open (A ViewerController.swift:673-679)
-  hello,     \* the app's hello: voxl's hello on this connection reached it (A ViewerController.swift:39,
+  opened,    \* the app has handled this socket's status open (A ViewerController.swift:683-689)
+  hello,     \* the app's hello: voxl's hello on this connection reached it (A ViewerController.swift:41,
              \* 619; cleared by load() :360 and a close :668)
   armed,     \* Page.input's armed (A Page.swift:80)
   hold,      \* Page.input's holding: [code, mods], code None when null (A Page.swift:80, 108)
@@ -121,7 +121,7 @@ Set(r) == /\ hw' = r.hw /\ fingers' = r.fingers /\ used' = r.used /\ envn' = r.e
           /\ stale' = r.stale /\ fresh' = r.fresh /\ bad' = r.bad
 
 -----------------------------------------------------------------------------
-(* voxl's process of a screen (R server.rs:258-305, 329-381; mac/input.rs) *)
+(* voxl's process of a screen (R server.rs:261-308, 332-384; mac/input.rs) *)
 
 Flags(r, s) == IF r.mac[s]["Cmd"] # Free THEN {"Cmd"} ELSE {}
 
@@ -139,14 +139,14 @@ K(m, dn, src, want) == [t |-> "k", m |-> m, dn |-> dn, src |-> src, want |-> wan
 B(dn, src, want)    == [t |-> "b", m |-> None, dn |-> dn, src |-> src, want |-> want]
 R                   == [t |-> "r", m |-> None, dn |-> FALSE, src |-> None, want |-> {}]
 
-\* One message of the page, handled by screen s's server (R server.rs:258-286,
+\* One message of the page, handled by screen s's server (R server.rs:261-289,
 \* 329-381) and its input thread (one channel per process, in order). k
 \* (mac/input.rs:340-418): ⌘ is
 \* a flags change, posted only when it changes mods (:341-359); a letter
 \* already pressed is posted again as an autorepeat (:367-371), else pressed;
 \* an up is posted only for a pressed key (:361-365). Esc and a chord's key
 \* are pressed and released at once (voxlTap, voxlChord). b (:259-287): a
-\* down or up that matches the button's state is dropped. r (server.rs:381):
+\* down or up that matches the button's state is dropped. r (server.rs:384):
 \* release_all.
 Post(r, s, x) ==
   CASE x.t = "k" /\ x.m = "Cmd" ->
@@ -178,8 +178,8 @@ KbdUp(r, c)              == IF c \in r.down THEN Send([r EXCEPT !.down = @ \ {c}
                             ELSE r
 KbdReleaseAll(r)         == Send([r EXCEPT !.down = {}], R)
 
-\* Page.input (A Page.swift:74-151). disarm (:87) posts 'armed' [] and the app
-\* clears the bar (A ViewerController.swift:688-689). press and lift (:85-86)
+\* Page.input (A Page.swift:74-160). disarm (:87) posts 'armed' [] and the app
+\* clears the bar (A ViewerController.swift:698-699). press and lift (:85-86)
 \* dispatch the modifiers' keydowns and keyups on #kbd, into keyboard.ts.
 Disarm(r)           == IF r.armed # {} THEN [r EXCEPT !.armed = {}, !.bar = IF Has("ArmedMsg") THEN {} ELSE @]
                        ELSE r
@@ -247,7 +247,7 @@ VoxlRelease(r) ==
 -----------------------------------------------------------------------------
 (* The app *)
 
-\* release() (A ViewerController.swift:720-723): voxlRelease in the page, the
+\* release() (A ViewerController.swift:730-733): voxlRelease in the page, the
 \* bar's lights off.
 Release(r) ==
   LET r1 == IF r.doc = "page" THEN VoxlRelease(r) ELSE r
@@ -255,7 +255,7 @@ Release(r) ==
 
 \* The page in the view goes (newWebView :327-334, closePage :374-386): the
 \* view leaves the window, so the page is hidden and sends r (R main.ts:
-\* 118-121); then it closes and its voxl releases all (R server.rs:287-291).
+\* 118-121); then it closes and its voxl releases all (R server.rs:290-294).
 \* Assumed: both reach voxl before a new page's first message (that needs a
 \* commit and a socket first).
 Teardown(r) ==
@@ -274,10 +274,10 @@ Load(r) == [NewDoc(Teardown(r), "blank") EXCEPT !.hello = FALSE,
                                                 !.focused = (r.doc = "blank" /\ r.focused),
                                                 !.bar = IF Has("LoadClearsBar") THEN {} ELSE @]
 
-\* The app's up (send "up", Pointer.swift:256-262) into the page.
+\* The app's up (send "up", Pointer.swift:266-272) into the page.
 SendUp(r) == LET r1 == [r EXCEPT !.dragging = FALSE] IN IF r.doc = "page" THEN MouseUp(r1) ELSE r1
 
-\* Drag g ends (Pointer.swift:98-111, 164-202), read with the mode now: a hold
+\* Drag g ends (Pointer.swift:108-121, 174-212), read with the mode now: a hold
 \* sends up if dragging, in either mode (:197-199; before a302a7d its mode
 \* guard came first: none on the picture in Direct); a Direct pan on the
 \* picture sends up in its default branch (:175-177), and in Trackpad it is a
@@ -340,7 +340,7 @@ KeyUp(k) ==
      IN Set(IF scene = "active" /\ doc = "page" /\ focused THEN KeyOut(r0, k) ELSE r0)
 
 \* A tap or an iPad pointer click: click(0) runs voxlMouse down then up
-\* (Pointer.swift:92-96, 204-214, 256-268).
+\* (Pointer.swift:102-106, 214-224, 266-278).
 Click ==
   /\ scene = "active" /\ used.click < Clicks /\ Free1
   /\ LET r0 == [Now EXCEPT !.used.click = @ + 1]
@@ -360,7 +360,7 @@ DragStart(g) ==
 \* Dan lifts a finger, or lets go of the trackpad's button.
 DragEnd(g) == g \in fingers /\ Set(EndDrag(Now, g))
 
-\* The Trackpad/Direct control on the pad (A ViewerController.swift:136-139),
+\* The Trackpad/Direct control on the pad (A ViewerController.swift:137-140),
 \* with another finger while one drags, or between drags. mode's didSet sends
 \* up if dragging (A Pointer.swift:18-26).
 ModeFlip ==
@@ -387,7 +387,7 @@ BarTap ==
 
 \* Dan picks a Mac key from the bar's menu: chord (A KeyBar.swift:151-155)
 \* runs voxlChord and, since 5e57a1f, clears the bar (:154); Paste
-\* (:183-187) does the same through voxlPaste's ⌘V (A Page.swift:142-148;
+\* (:183-187) does the same through voxlPaste's ⌘V (A Page.swift:151-157;
 \* its paste event and keyboard.ts's delayed ⌘V, R keyboard.ts:195-199, are
 \* not modeled). The key is the next key: it promises its own ⌘ and the
 \* bar's.
@@ -398,7 +398,7 @@ BarChord ==
      IN Set([r1 EXCEPT !.bar = IF Has("ChordBarClear") THEN {} ELSE @, !.fresh = FALSE])
 
 \* KbLoading: Dan taps the bar's keyboard button, "Show or hide the
-\* keyboard" (A KeyBar.swift:94 -> onKeyboard, ViewerController.swift:147 ->
+\* keyboard" (A KeyBar.swift:94 -> onKeyboard, ViewerController.swift:148 ->
 \* toggleKeyboard, :714-717 -> focusKeys, :706-712), before the picture gave
 \* the view the keys. The bar is added after the cover, so it is above it
 \* (:102, 148), and beside it: the cover covers only the picture
@@ -456,8 +456,8 @@ Switch ==
 Reload == Ev("reload") /\ doc # "none" /\ Set([Load(Now) EXCEPT !.envn = @ + 1])
 
 \* The socket closes and voxl sees it: its read loop ends and it releases all
-\* (R server.rs:258-291). The worker posts status closed (R worker.ts:113-117;
-\* the app: hello false, A ViewerController.swift:667-672) and reconnects in
+\* (R server.rs:261-294). The worker posts status closed (R worker.ts:113-117;
+\* the app: hello false, A ViewerController.swift:677-682) and reconnects in
 \* 1 s. The app hears the close after the open (opened).
 LossLoud ==
   /\ Ev("loud") /\ doc = "page" /\ sock = "open" /\ opened
@@ -465,7 +465,7 @@ LossLoud ==
      IN Set(IF Has("Bye") THEN ReleaseAll(r0, row) ELSE r0)
 
 \* The socket stops on the phone only: voxl keeps the connection, and what it
-\* holds (its read loop has no timeout, server.rs:258), until TCP gives up.
+\* holds (its read loop has no timeout, server.rs:261), until TCP gives up.
 LossSilent ==
   /\ Ev("silent") /\ doc = "page" /\ sock = "open" /\ opened
   /\ Set([Now EXCEPT !.sock = "closed", !.opened = FALSE, !.hello = FALSE, !.stale[row] = TRUE,
@@ -489,11 +489,11 @@ SocketOpen ==
   /\ Set([Now EXCEPT !.sock = "open", !.opened = FALSE])
 
 \* Page.watch passes the status on (A Page.swift:35) and the app's status
-\* handler runs, since 5e57a1f on every open (A ViewerController.swift:673-679),
+\* handler runs, since 5e57a1f on every open (A ViewerController.swift:683-689),
 \* a window blur in the page, which keyboard.ts maps to its releaseAll (R
 \* keyboard.ts:141-145, 285: down cleared, r sent: voxl's release_all lets go
 \* of everything that screen's voxl holds, for every connection, R
-\* server.rs:381, mac/input.rs:420-435). Page.input's armed, holding and
+\* server.rs:384, mac/input.rs:420-435). Page.input's armed, holding and
 \* clickMods stay, and so does the bar: its modifiers stay armed across a
 \* reconnect. Dan's taps and keys can reach voxl between SocketOpen and this
 \* step (the status's hops from the worker to the page to the app).
@@ -502,10 +502,10 @@ StatusOpen ==
   /\ LET r0 == [Now EXCEPT !.opened = TRUE]
      IN Set(IF Has("OpenRelease") THEN KbdReleaseAll(r0) ELSE r0)
 
-\* voxl's first message on the new connection is its hello (R server.rs:220);
+\* voxl's first message on the new connection is its hello (R server.rs:223);
 \* the worker passes it on after its status open (R worker.ts:155-164),
 \* Page.watch posts it (A Page.swift:34), and the app's hello handler (A
-\* ViewerController.swift:618-651) runs, since ce88951, the bar's lit
+\* ViewerController.swift:631-661) runs, since ce88951, the bar's lit
 \* modifiers again (keyBar.resend, :651; A KeyBar.swift:165-168: voxlArm if
 \* any are lit). Since 5e57a1f the hello lets nothing go: voxl sends it again
 \* when it restarts its stream (not modeled here: it would only arm the lit
@@ -525,7 +525,7 @@ Settled == ~ENABLED Quick
 
 \* The page's first frame plays (Page.watch posts picture once per page,
 \* A Page.swift:13-15, 36-38; video is off while the page is hidden, R main.ts:
-\* 108-121): picture (A ViewerController.swift:652-663) runs focusKeys
+\* 108-121): picture (A ViewerController.swift:662-673) runs focusKeys
 \* (:706-712), so the view takes the keyboard focus. Frames follow the hello.
 Picture ==
   /\ doc = "page" /\ sock = "open" /\ hello /\ ~focused /\ scene # "background"

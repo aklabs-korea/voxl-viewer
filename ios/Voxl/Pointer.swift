@@ -28,7 +28,9 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
     var desk = CGSize(width: 4096, height: 1728)
     /// Where the Mac's pointer is, in desktop pixels.
     var cursor = CGPoint(x: 2048, y: 864)
-    /// 1 is the whole desktop (fit); up to 8.
+    /// The part of the desktop on view, as fractions of it: all of it, a half or a window (Parts.swift).
+    private(set) var box = CGRect(x: 0, y: 0, width: 1, height: 1)
+    /// 1 is the whole part (fit); up to 8.
     private(set) var zoom: CGFloat = 1
     /// The top-left of what's on view, in desktop pixels.
     private(set) var origin = CGPoint.zero
@@ -47,10 +49,18 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
     private enum TwoFinger { case undecided, scroll, zoom }
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
+    /// The part in desktop pixels: the cursor and the view stay inside it.
+    var area: CGRect {
+        CGRect(x: box.minX * desk.width, y: box.minY * desk.height, width: box.width * desk.width, height: box.height * desk.height)
+    }
+
+    /// The part's shape, for the picture's box.
+    var aspect: CGFloat { area.height > 0 ? area.width / area.height : 4096.0 / 1728.0 }
+
     /// Screen points per desktop pixel, at this zoom.
     private var k: CGFloat {
-        guard let picture, desk.width > 0 else { return 1 }
-        return zoom * picture.bounds.width / desk.width
+        guard let picture, area.width > 0 else { return 1 }
+        return zoom * picture.bounds.width / area.width
     }
 
     /// The picture (the web view's box) and the pad take the gestures; the cursor is drawn over the picture.
@@ -269,7 +279,7 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
 
     /// Moves the Mac's pointer; follow keeps it on view while zoomed in (the view moves with it).
     func moveTo(_ p: CGPoint, follow: Bool = false) {
-        cursor = CGPoint(x: min(max(0, p.x), desk.width - 1), y: min(max(0, p.y), desk.height - 1))
+        cursor = inArea(p)
         if follow, zoom > 1, let picture {
             let w = picture.bounds.width / k, h = picture.bounds.height / k
             let margin = 24 / k
@@ -296,16 +306,37 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
 
     private func setOrigin(_ o: CGPoint) {
         guard let picture else { return }
-        let w = picture.bounds.width / k, h = picture.bounds.height / k
-        origin = CGPoint(x: min(max(0, o.x), max(0, desk.width - w)), y: min(max(0, o.y), max(0, desk.height - h)))
+        let w = picture.bounds.width / k, h = picture.bounds.height / k, a = area
+        origin = CGPoint(x: min(max(a.minX, o.x), max(a.minX, a.maxX - w)), y: min(max(a.minY, o.y), max(a.minY, a.maxY - h)))
         apply()
     }
 
     /// The page's #surface follows the zoom; the cursor follows both.
     func apply() {
+        if let picture {
+            let w = picture.bounds.width / k, h = picture.bounds.height / k, a = area
+            origin = CGPoint(x: min(max(a.minX, origin.x), max(a.minX, a.maxX - w)),
+                             y: min(max(a.minY, origin.y), max(a.minY, a.maxY - h)))
+        }
         let kk = k
-        run("window.voxlZoom && voxlZoom(\(zoom), \(-origin.x * kk), \(-origin.y * kk))")
+        run("window.voxlZoom && voxlZoom(\(desk.width * kk), \(desk.height * kk), \(-origin.x * kk), \(-origin.y * kk))")
         place()
+    }
+
+    /// The nearest point to p inside the part.
+    private func inArea(_ p: CGPoint) -> CGPoint {
+        let a = area
+        return CGPoint(x: min(max(a.minX, p.x), a.maxX - 1), y: min(max(a.minY, p.y), a.maxY - 1))
+    }
+
+    /// Shows part of the desktop (fractions of it), fitted to it, or (keepZoom) as zoomed in as before and
+    /// kept inside it. The cursor stays in it; the Mac's pointer goes there with the next move or click.
+    func show(box b: CGRect, keepZoom: Bool = false) {
+        box = b
+        if !keepZoom { zoom = 1 }
+        cursor = inArea(cursor)
+        setOrigin(keepZoom ? origin : area.origin)
+        onChange?()
     }
 
     private func place(of p: CGPoint) -> CGPoint { CGPoint(x: (p.x - origin.x) * k, y: (p.y - origin.y) * k) }
@@ -318,13 +349,14 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
 
     /// A screen's view, kept while the app shows another.
     struct State {
-        var desk: CGSize, cursor: CGPoint, zoom: CGFloat, origin: CGPoint
+        var desk: CGSize, cursor: CGPoint, zoom: CGFloat, origin: CGPoint, box: CGRect
     }
 
     var state: State {
-        get { State(desk: desk, cursor: cursor, zoom: zoom, origin: origin) }
+        get { State(desk: desk, cursor: cursor, zoom: zoom, origin: origin, box: box) }
         set {
             desk = newValue.desk
+            box = newValue.box
             cursor = newValue.cursor
             zoom = newValue.zoom
             origin = newValue.origin
@@ -337,8 +369,8 @@ final class Pointer: NSObject, UIGestureRecognizerDelegate, UIPointerInteraction
     func reset(desk size: CGSize) {
         desk = size
         zoom = 1
-        origin = .zero
-        cursor = CGPoint(x: min(cursor.x, size.width - 1), y: min(cursor.y, size.height - 1))
+        origin = area.origin
+        cursor = inArea(cursor)
         apply()
         onChange?()
     }
