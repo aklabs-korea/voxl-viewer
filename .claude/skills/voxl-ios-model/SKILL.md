@@ -101,7 +101,8 @@ Every config starts PhoneKeys with the app in front on screen 1, connected; Phon
 | `keys-fresh` | a held letter, click or drag, with or without ⌘ (tapped while the page shows); the socket goes silent (voxl keeps it open), and the worker reconnects or a fresh page loads (a load() without release()) | NoExtraModifier (see 4) |
 
 `KbLoading` (the bar's keyboard button before the picture) is on in every keys config but `keys-loading`, so
-that one checks the `Resend` fix alone and break 5 has its own config.
+that one checks the `Resend` fix alone and break 5 has its own config. Its "nothing" doesn't cover a chord's
+own modifiers (scope item c).
 
 The breaks, in the code's words (A = `ios/Voxl`, R = voxl 0.3.4):
 
@@ -280,7 +281,12 @@ describes the code:
   Switch, Commit, SocketOpen, StatusOpen, Hello). (b) ⌘ tapped while a page loads misses a pad tap made between
   the new socket opening and the hello, and stays lit for the next key (`keys-fresh` with `ArmLoading`:
   `NoMissingModifier`, path Reload, BarToggle, Commit, SocketOpen, Click). Its key version, after the keyboard
-  button, is break 5.
+  button, is break 5. (c) Its chord version: ⇧ tapped while a page loads, then a Mac key from the bar (⌘Tab)
+  between the new socket opening and the hello reaches the Mac without ⇧, and the chord clears the bar, so the
+  hello resends nothing (A KeyBar.swift:154, ViewerController.swift:651). The model can't show it, since ⌘
+  stands for every modifier and every chord presses ⌘ (see Not modeled); a copy where the chord's modifier
+  differs from the bar's breaks `NoMissingModifier` on `keys-loading`, path Switch, BarToggle, Commit,
+  SocketOpen, BarChord. Same millisecond window as (b) and break 5: very rare.
 - voxl refusing connections (voxl down while its page stays in the view: the worker's socket closes every second,
   R worker.ts:113-117): the model has one close per lost socket and no clock, so it shows the 10 s watch firing
   10 s after the close, a fresh page, the failed load and "isn't answering". Since 5e57a1f that is what the code
