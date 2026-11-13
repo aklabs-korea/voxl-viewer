@@ -636,7 +636,16 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
             } else if picture {
                 cover.hide()
+            } else if coverAction == .sharp {
+                // Sharp again before a frame: the cover goes back to saying it connects.
+                showCover(label)
             }
+            // voxl lets go of every key and button when a socket closes, but one that went silent is still
+            // open on the Mac, so a button held through it stays down. Every connection starts by letting go
+            // (voxl's own release-all; this page holds nothing yet), then a modifier tapped on the bar while
+            // this page loaded reaches it.
+            run("dispatchEvent(new Event('blur'))")
+            keyBar.resend()
         case "picture":
             picture = true
             failing = false

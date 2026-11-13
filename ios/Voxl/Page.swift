@@ -87,10 +87,11 @@ enum Page {
       const disarm = () => { if (armed.length) { armed = []; post({ t: 'armed', mods: [] }); } };
       window.voxlArm = (mods) => { armed = mods; };
       window.voxlTap = (k, code) => {
+        letGo();
         const mods = armed; disarm();
         press(mods); key('keydown', k, code, mods); key('keyup', k, code, mods); lift(mods);
       };
-      window.voxlChord = (mods, k, code) => { press(mods); key('keydown', k, code, mods); key('keyup', k, code, mods); lift(mods); };
+      window.voxlChord = (mods, k, code) => { letGo(); press(mods); key('keydown', k, code, mods); key('keyup', k, code, mods); lift(mods); };
       // A soft-keyboard or hardware key after the bar's modifier: the modifier goes down first and up after it.
       const letGo = () => { if (holding) { const m = holding.mods; holding = null; lift(m); } };
       document.addEventListener('keydown', (e) => {
