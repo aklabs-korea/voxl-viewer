@@ -32,7 +32,7 @@ gate for the window in front or recent local input.
 ## Install
 
 Download the latest build from
-[Releases](https://github.com/danyeoakl/voxl-viewer/releases/latest).
+[Releases](https://github.com/aklabs-korea/voxl-viewer/releases/latest).
 
 ### Mac
 
