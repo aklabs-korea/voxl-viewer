@@ -3,3 +3,5 @@ out/
 bin/
 obj/
 .DS_Store
+ios/Voxl.xcodeproj/
+ios/Voxl/Info.plist

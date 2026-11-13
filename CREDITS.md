@@ -6,7 +6,9 @@ voxl viewer is an unofficial companion to [voxl](https://github.com/tembo/voxl),
 desktop by Tembo. It is not made or endorsed by Tembo. The apps load the web page that your own
 voxl serves; no voxl code is copied into this repository.
 
-The app icon, `icon/voxl.ico`, is voxl's favicon. It is used under voxl's MIT license
+The app icon, `icon/voxl.ico`, is voxl's favicon, and so is the iPhone and iPad app's icon
+(`ios/Voxl/Assets.xcassets/AppIcon.appiconset/icon.png`, the same image at 1024 pixels). They are
+used under voxl's MIT license
 ([source](https://github.com/tembo/voxl/blob/main/LICENSE)):
 
 ```

@@ -1,0 +1,84 @@
+# The iPhone app (iPhone Duo first): voxl's own page in a web view, like the Mac viewer, plus a
+# trackpad cursor, zoom, a key bar and the screen tabs. Generate the project with `xcodegen generate`.
+name: Voxl
+options:
+  bundleIdPrefix: la.aklabs
+  deploymentTarget:
+    iOS: "27.1"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: L52Z6X4335
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Voxl:
+    type: application
+    platform: iOS
+    sources:
+      - path: Voxl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: la.aklabs.voxl
+        PRODUCT_NAME: Voxl
+        # iPhone and iPad.
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Voxl/Info.plist
+      properties:
+        CFBundleDisplayName: voxl
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        # The inner screen ignores orientation locks, so every way up but upside down.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # iPad: every way up, and its windows resize (Split View, Stage Manager).
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIViewControllerBasedStatusBarAppearance: true
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        ITSAppUsesNonExemptEncryption: false
+        # voxl on this phone's own simulator host (http://localhost) in development.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # A test build only (ios/build.sh with TESTLOG=): where its test log goes. Empty otherwise.
+        VoxlTestLog: $(VOXL_TESTLOG)
+        # voxlviewer://add?d=... adds machines (Machines.swift).
+        CFBundleURLTypes:
+          - CFBundleURLName: la.aklabs.voxl
+            CFBundleURLSchemes: [voxlviewer]
+  # Gestures and keys in the simulator against a dev voxl (ios/build.sh uitest).
+  VoxlUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [VoxlUITests]
+    dependencies:
+      - target: Voxl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: la.aklabs.voxl.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Voxl
+schemes:
+  Voxl:
+    build:
+      targets:
+        Voxl: all
+        VoxlUITests: [test]
+    test:
+      targets: [VoxlUITests]

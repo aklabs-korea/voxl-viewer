@@ -1,10 +1,10 @@
 # voxl viewer
 
-Small native apps for Mac and Windows that show a [voxl](https://github.com/tembo/voxl)
+Small native apps for Mac, Windows, iPhone and iPad that show a [voxl](https://github.com/tembo/voxl)
 remote desktop in its own window.
 
 voxl, by Tembo, streams a machine's screen to a web page. These apps load that same page in the
-system's web view (WebKit on the Mac, WebView2 on Windows) and add what a browser tab can't do.
+system's web view (WebKit on the Mac, iPhone and iPad, WebView2 on Windows) and add what a browser tab can't do.
 
 This is an unofficial, independent project. It is not made or supported by Tembo.
 
@@ -32,7 +32,7 @@ gate for the window in front or recent local input.
 ## Install
 
 Download the latest build from
-[Releases](https://github.com/danyeoakl/voxl-viewer/releases/latest).
+[Releases](https://github.com/aklabs-korea/voxl-viewer/releases/latest).
 
 ### Mac
 
@@ -57,6 +57,11 @@ The app isn't code-signed, so SmartScreen may say "Windows protected your PC". C
 
 The app needs the Microsoft Edge WebView2 Runtime. Windows 11 includes it. On Windows 10, install
 the [Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it's missing.
+
+### iPhone and iPad
+
+iOS or iPadOS 27.1 or later. The app isn't on the App Store: build it yourself (see
+[Build from source](#iphone-and-ipad-2)), or install it from TestFlight if you're on the AK Labs team.
 
 ## Before you start
 
@@ -174,6 +179,27 @@ VoxlViewer.exe https://my-pc.example.ts.net:6901/ "My PC"
 A launcher or a URL opens the saved machine that has a screen at that URL, at its screen 1. A URL
 that no machine has opens as a machine of its own.
 
+### iPhone and iPad
+
+- **Machines.** More (⋯) > Machines…: add a machine with its voxl link, then its other screens in
+  order. Turn on **Sharp** for a screen wider than 4096 pixels: the phone and iPad decode up to that.
+  A link `voxlviewer://add?d=…` adds machines in one tap, where `d` is the desktop apps' machine list
+  (`[{"name", "screens": [{"name", "url", "sharp"}]}]`) as base64url JSON. The device has to reach
+  the voxl URL, for example with Tailscale on it.
+- **Screens.** Tabs at the top, or F1-F9 on a hardware keyboard.
+- **Touch.** Trackpad, the default: one finger moves a pointer the app draws, a tap clicks, two
+  taps double-click, hold then drag drags, two fingers scroll, a two-finger tap right-clicks. Direct:
+  a finger on the picture acts where it touches, and the pad under the picture is still a trackpad.
+  Pinch zooms the view only (the remote never sees it); **Fit** or a two-finger double tap goes back.
+- **iPad trackpad or mouse.** It points at the picture directly: click, secondary click, drag and
+  scroll.
+- **Keys.** The key bar has Esc, Tab, ⌘ ⌥ ⌃ ⇧ for the next key or click only, the arrows, F1-F12,
+  the Mac shortcuts iOS keeps for itself (Spotlight, App Switcher, Mission Control, Show Desktop),
+  Paste and the keyboard. A hardware keyboard's keys go to the remote.
+- **Sound.** As on the desktop: while the app is in front and you touched or typed in it in the
+  last 5 minutes.
+- **iPhone Duo.** Open flat, folded or half-open; half-open puts the picture above or beside the fold.
+
 ## Keys
 
 voxl maps keys between Mac and PC on its own. For example, Cmd on a Mac is Ctrl on a Windows
@@ -250,6 +276,10 @@ Settings from earlier versions, with one URL per machine, load as machines with 
 
 No telemetry. The apps only connect to the voxl URLs you add. The Windows app's `keys.log`
 (see [Keys](#windows-app)) stays on the PC and holds no letters or text, only when keys were typed.
+The iPhone and iPad app sends nothing but to the voxl links you add, except a test build made with
+`TESTLOG=` (see [Build from source](#iphone-and-ipad-2)): it posts what it measures (frame rate,
+heat, battery, window sizes, touches, and keys by name only, never letters or text) to that URL every
+10 seconds.
 
 ## Build from source
 
@@ -278,6 +308,20 @@ This makes `out/win-x64/VoxlViewer.exe`. Or install it in one step: this builds 
 powershell -ExecutionPolicy Bypass -File windows\install.ps1
 ```
 
+### iPhone and iPad
+
+Needs a Mac with Xcode 27.2 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`).
+
+```sh
+ios/build.sh sim          # build for a simulator and open it (SIM="iPad Air 13-inch (M4)"; default: iPhone Duo)
+ios/build.sh uitest       # the gesture and key test, against a dev voxl (see ios/VoxlUITests)
+ios/build.sh testflight   # archive, sign in Apple's cloud and upload to TestFlight
+```
+
+`testflight` needs an App Store Connect API key (`ASC_ENV`, see the top of `ios/build.sh`), your
+Apple team (`TEAM=`) and a bundle ID of your own (`ios/project.yml`).
+
 ### Releases
 
 Pushing a tag such as `v1.0.0` builds both apps and attaches them to a GitHub release. To sign
@@ -295,7 +339,7 @@ Without them, the Mac app has an ad-hoc signature and the release notes say so.
 
 ## Credits
 
-[voxl](https://github.com/tembo/voxl) is by Tembo, under the MIT license. The app icon is voxl's
+[voxl](https://github.com/tembo/voxl) is by Tembo, under the MIT license. The app icons are voxl's
 favicon, used under that license. See [CREDITS.md](CREDITS.md).
 
 ## License
