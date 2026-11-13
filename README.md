@@ -132,7 +132,7 @@ the graphics card, even when the machine decodes Full on the CPU.
 ### Part of a screen
 
 A screen's key or tab again shows part of it: **Whole**, **Left half**, **Right half**, then the
-**window** under the remote machine's pointer, then Whole again. The window's title and the note
+**window** under the remote machine's pointer, then Whole again. The window's title (on the iPhone and iPad, the tab) and the note
 in the middle say which. Each screen keeps its part while you look at another. The stream stays
 the same: the app zooms into the picture it already has, so a switch is instant and nobody else
 watching sees a change. The pointer stays in the part: it stops at its edges.
@@ -222,7 +222,11 @@ that no machine has opens as a machine of its own.
   A link `voxlviewer://add?d=…` adds machines in one tap, where `d` is the desktop apps' machine list
   (`[{"name", "screens": [{"name", "url", "sharp"}]}]`) as base64url JSON. The device has to reach
   the voxl URL, for example with Tailscale on it.
-- **Screens.** Tabs at the top, or F1-F9 on a hardware keyboard.
+- **Screens.** Tabs at the top (one even for a machine with one screen), or F1-F9 on a hardware
+  keyboard. The tab or key of the screen on view steps its part (see [Part of a screen](#part-of-a-screen)):
+  the picture takes the part's shape, Fit fits the part, and the trackpad pointer stops at its edges.
+  More (⋯) > Fit the Mac's window picks Off, Large, Medium or Fine; the window is fitted to the
+  picture's room with the keyboard down, and goes back when the app goes to the background.
 - **Touch.** Trackpad, the default: one finger moves a pointer the app draws, a tap clicks, two
   taps double-click, hold then drag drags, two fingers scroll, a two-finger tap right-clicks. Direct:
   a finger on the picture acts where it touches, and the pad under the picture is still a trackpad.

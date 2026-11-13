@@ -1,4 +1,4 @@
-// The part of the screen a viewer shows. Every app adds this to voxl's page and calls
+// The part of the screen a viewer shows. The Mac and Windows apps add this to voxl's page and call
 // voxlPart([x, y, w, h]) with the part as fractions of the screen (0 to 1), or voxlPart(null)
 // for the whole screen. voxl's #surface is zoomed so the part fills the window, centered, and
 // clipped to it; voxl maps clicks through #surface's box on screen, so they land where they
@@ -6,6 +6,7 @@
 //
 // The pointer stays in the part: a move outside it (over the black around it, or while a
 // button is held) goes to the part's nearest edge, and a press or wheel there does nothing.
+// The iPhone and iPad app zooms with its own pointer instead (ios/Voxl/Pointer.swift).
 (() => {
   if (window !== window.top) return;
   let part = null;

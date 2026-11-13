@@ -7,6 +7,8 @@ import UIKit
 struct Frames: Equatable {
     var nav: CGRect
     var picture: CGRect
+    /// The room the picture is fitted into: the shape a Mac window is fitted to (Parts.swift).
+    var room: CGRect
     var pad: CGRect
     var keys: CGRect
 }
@@ -27,14 +29,14 @@ enum Layout {
             let top = CGRect(x: area.minX, y: area.minY, width: area.width, height: fold.minY - area.minY)
             let base = CGRect(x: area.minX, y: fold.maxY, width: area.width, height: max(0, area.maxY - fold.maxY))
             let (nav, pad, keys) = column(base)
-            return Frames(nav: nav, picture: fit(aspect, in: top), pad: pad, keys: keys)
+            return Frames(nav: nav, picture: fit(aspect, in: top), room: top, pad: pad, keys: keys)
         }
         if let fold, fold.height > fold.width, fold.minX > area.minX {
             // Like a book: the picture on the left half; tabs, pad and keys on the right.
             let left = CGRect(x: area.minX, y: area.minY, width: fold.minX - area.minX, height: area.height)
             let right = CGRect(x: fold.maxX, y: area.minY, width: max(0, area.maxX - fold.maxX), height: area.height)
             let (nav, pad, keys) = column(right)
-            return Frames(nav: nav, picture: fit(aspect, in: left), pad: pad, keys: keys)
+            return Frames(nav: nav, picture: fit(aspect, in: left), room: left, pad: pad, keys: keys)
         }
         // Flat or closed: tabs on top, the picture across the whole width, the pad, the keys at the bottom.
         let (nav, below) = area.divided(atDistance: min(navHeight, area.height), from: .minYEdge)
@@ -42,7 +44,8 @@ enum Layout {
         let room = keyboardTop == nil ? middle.height - minPad : middle.height
         let height = max(0, min(middle.width / aspect, room))
         let (row, pad) = middle.divided(atDistance: height, from: .minYEdge)
-        return Frames(nav: nav, picture: fit(aspect, in: row), pad: pad, keys: keys)
+        let most = CGRect(x: middle.minX, y: middle.minY, width: middle.width, height: max(0, room))
+        return Frames(nav: nav, picture: fit(aspect, in: row), room: most, pad: pad, keys: keys)
     }
 
     /// Tabs on top, keys at the bottom, the pad between.

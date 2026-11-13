@@ -61,12 +61,12 @@ ASSUME /\ DanActs \subseteq DanNames /\ Events \subseteq EventNames /\ Off \subs
 
 Has(g)   == g \notin Off
 Other(s) == 3 - s
-\* A scale request list without x (hub.scale_requests, R server.rs:296-303, 398-404).
+\* A scale request list without x (hub.scale_requests, R server.rs:299-306, 401-407).
 Drop1(q, x) == SelectSeq(q, LAMBDA y : y # x)
 
 VARIABLES
   scene,     \* "active", "inactive", "background", "suspended" (A App.swift:25-28)
-  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:54, 733)
+  recent,    \* Dan touched or typed in the last 5 minutes (lastInput, A ViewerController.swift:54, 736)
   row,       \* the screen asked for
   web,       \* a web view exists
   dscr,      \* the screen the view's page was loaded for (loaded, :38)
@@ -123,7 +123,7 @@ Set(r) == /\ scene' = r.scene /\ recent' = r.recent /\ row' = r.row /\ web' = r.
 -----------------------------------------------------------------------------
 (* The app's code *)
 
-\* updateAudio (A ViewerController.swift:737-747): audible = committed &&
+\* updateAudio (A ViewerController.swift:740-750): audible = committed &&
 \* active && recentInput; nothing happens if muted already says so; else the
 \* view's suspension and the page's audio session type. The script call runs
 \* in the view's document now: if voxl's page hasn't committed yet it lands in
@@ -141,7 +141,7 @@ UpdateAudio(r) ==
 Input(r) == LET r1 == [r EXCEPT !.recent = TRUE] IN IF r.recent THEN r1 ELSE UpdateAudio(r1)
 
 \* The page in the view goes: its socket closes, and voxl drops the phone's
-\* scale request (R server.rs:296-303).
+\* scale request (R server.rs:299-306).
 DocGone(r) ==
   LET r1 == IF r.sock \in {"open", "dead"} THEN [r EXCEPT !.reqs[r.dscr] = Drop1(@, "phone")] ELSE r
   IN [r1 EXCEPT !.nav = "none", !.sock = "none", !.pagePic = FALSE, !.docWide = FALSE,
@@ -211,7 +211,7 @@ SockEnds(r) ==
   [StatusClosed(r) EXCEPT !.sock = "closed", !.reqs[r.dscr] = Drop1(@, "phone")]
 
 \* What a screen's capture should be: Full when the latest request is the
-\* other viewer's (R server.rs:398-404, 296-303).
+\* other viewer's (R server.rs:401-407, 299-306).
 WantWide(r, s) == r.reqs[s] # <<>> /\ r.reqs[s][Len(r.reqs[s])] = "other"
 
 -----------------------------------------------------------------------------
@@ -241,9 +241,9 @@ Init ==
 AudioStarts == web /\ nav = "page" /\ ~audioOn /\ scene # "suspended" /\ Set([Now EXCEPT !.audioOn = TRUE])
 
 \* The worker's socket opens (R worker.ts:104-112) and voxl's first message
-\* is the hello with the current size (R server.rs:220). On open, a page
+\* is the hello with the current size (R server.rs:223). On open, a page
 \* loaded with ?scale=0.8 asks for it (R main.ts:153-157), which voxl makes
-\* its latest request (server.rs:398-404).
+\* its latest request (server.rs:401-407).
 \* The hello was sent before the cs was read.
 SocketOpens ==
   /\ web /\ nav = "page" /\ sock = "closed" /\ up[dscr] /\ scene # "suspended"

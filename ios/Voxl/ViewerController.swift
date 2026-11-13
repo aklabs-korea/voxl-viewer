@@ -31,6 +31,8 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     let pointer = Pointer()
     /// Each screen's zoom and pointer while the app runs, by page URL.
     var views: [String: Pointer.State] = [:]
+    /// Each screen's part, and following a window (Parts.swift).
+    let parts = PartState()
     var keyboardTop: CGFloat?
     var downloads: [ObjectIdentifier: URL] = [:]
 
@@ -46,8 +48,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     enum CoverAction { case none, otherScreen, sharp, signIn, machines }
     var coverAction = CoverAction.none
     var waitLater, retryLater, helloLater, tooWideLater: DispatchWorkItem?
-    /// The desktop's shape, from voxl's hello; Sharp's until then.
-    var aspect: CGFloat = 4096.0 / 1728.0
 
     // In front, the sound rule, the background.
     var active = false
@@ -114,6 +114,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         moreButton.showsMenuAsPrimaryAction = true
         moreButton.menu = UIMenu(children: [
             UIAction(title: "Machines…", image: UIImage(systemName: "desktopcomputer")) { [weak self] _ in self?.showMachines() },
+            UIDeferredMenuElement.uncached { [weak self] done in done(self.map { [$0.fitMenu] } ?? []) },
             UIAction(title: "Reconnect", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
                 self?.failing = false
                 self?.load()
@@ -188,7 +189,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             logRegions()
         }
         let f = Layout.frames(size: view.bounds.size, safe: view.safeAreaInsets, fold: fold,
-                              keyboardTop: keyboardTop, aspect: aspect)
+                              keyboardTop: keyboardTop, aspect: pointer.aspect)
         nav.frame = f.nav
         // Keep the tabs clear of a camera over the screen (the outer screen's is always there).
         var lead: CGFloat = 8, trail: CGFloat = 8
@@ -268,9 +269,10 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             UIAction(title: m.name, state: i == machineIndex ? .on : .off) { [weak self] _ in self?.pick(machine: i) }
         })
         tabs.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (i, s) in (machine?.screens ?? []).enumerated() where (machine?.screens.count ?? 0) > 1 {
+        // A tab even for a machine with one screen: tapped again, it steps the screen's part.
+        for (i, s) in (machine?.screens ?? []).enumerated() {
             var c: UIButton.Configuration = i == row ? .filled() : .gray()
-            c.title = "\(i + 1) · \(s.name)"
+            c.title = i == row && part != .whole ? "\(i + 1) · \(s.name) · \(part.name)" : "\(i + 1) · \(s.name)"
             c.buttonSize = .small
             c.titleLineBreakMode = .byTruncatingTail
             let b = UIButton(configuration: c)
@@ -283,14 +285,17 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
 
     func pick(machine i: Int) {
         guard i != machineIndex else { return }
+        leaveWindow()
         machineIndex = i
         row = 0
         switched()
     }
 
-    /// A tab or F1..F9: screen n, never another by itself.
+    /// A tab or F1..F9: screen n, never another by itself; the one on view again steps its part.
     func go(to n: Int) {
-        guard let machine, n < machine.screens.count, n != row else { return }
+        guard let machine, n < machine.screens.count else { return }
+        if n == row { return step() }
+        leaveWindow()
         row = n
         switched()
     }
@@ -364,6 +369,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         needsPassword = false
         keyBar.setArmed([])
         if !failing { showCover(label) }
+        watchWindow()
         TestLog.shared.add("load", ["screen": label])
         waitThenCheck()
         watchHello()
@@ -619,13 +625,10 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             hello = true
             helloLater?.cancel()
             let w = (body["w"] as? Double) ?? 0, h = (body["h"] as? Double) ?? 0
-            if w > 0, h > 0, abs(CGFloat(w / h) - aspect) > 0.001 {
-                aspect = CGFloat(w / h)
-                view.setNeedsLayout()
-            }
             if w > 0, h > 0 {
                 let size = CGSize(width: w, height: h)
                 if let saved = views[url.absoluteString], saved.desk == size { pointer.state = saved } else { pointer.reset(desk: size) }
+                pointer.show(box: part.box, keepZoom: true)
             }
             TestLog.shared.add("hello", ["w": w, "h": h, "os": body["os"] as? String ?? ""])
             // Every connection first hears the screen's current size, and Full until this page's Sharp
@@ -762,6 +765,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         endBackgroundTask()
         TestLog.shared.add("active")
         if web == nil { load() } else if picture { focusKeys() }
+        if web != nil, parts.follow == nil { watchWindow() }
         updateAudio()
         updateIdle()
     }
@@ -776,6 +780,8 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
 
     func enteredBackground() {
         TestLog.shared.add("background")
+        // Away from the app: the Mac's window goes back (and is fitted again on return).
+        leaveWindow()
         backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
             self?.closePage()
             self?.endBackgroundTask()
