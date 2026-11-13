@@ -91,15 +91,24 @@ enum Page {
         const mods = armed; disarm();
         press(mods); key('keydown', k, code, mods); key('keyup', k, code, mods); lift(mods);
       };
-      window.voxlChord = (mods, k, code) => { letGo(); press(mods); key('keydown', k, code, mods); key('keyup', k, code, mods); lift(mods); };
+      // A Mac shortcut or Paste from the bar is the next key: it takes the armed modifiers too.
+      window.voxlChord = (mods, k, code) => {
+        letGo();
+        const all = [...mods, ...armed.filter((m) => !mods.includes(m))]; disarm();
+        press(all); key('keydown', k, code, all); key('keyup', k, code, all); lift(all);
+      };
       // A soft-keyboard or hardware key after the bar's modifier: the modifier goes down first and up after it.
       const letGo = () => { if (holding) { const m = holding.mods; holding = null; lift(m); } };
+      // A modifier key (either side) is not the next key.
+      const isMod = (e) => ['Meta', 'Alt', 'Control', 'Shift'].includes(e.key) || /^(Meta|Alt|Control|Shift)(Left|Right)$/.test(e.code);
       document.addEventListener('keydown', (e) => {
-        if (!e.isTrusted) return;
+        if (!e.isTrusted || isMod(e)) return;
         if (holding && e.code !== holding.code) letGo();
-        if (!armed.length || MOD[e.code] || e.key === 'Meta' || e.key === 'Shift') return;
+        if (!armed.length) return;
         holding = { code: e.code, mods: armed }; disarm(); press(holding.mods);
       }, true);
+      // Text with no key (a suggestion, dictation, swipe typing) goes bare, and the modifier with it.
+      document.addEventListener('beforeinput', (e) => { if (e.isTrusted) disarm(); }, true);
       document.addEventListener('keyup', (e) => {
         if (holding && e.code === holding.code) { const m = holding.mods; holding = null; lift(m); }
       });

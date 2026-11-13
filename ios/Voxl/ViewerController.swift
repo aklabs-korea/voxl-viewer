@@ -45,8 +45,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     /// What the cover's button does: it follows what the cover says, never a flag left from before.
     enum CoverAction { case none, otherScreen, sharp, signIn, machines }
     var coverAction = CoverAction.none
-    /// This page's socket closed once: the next open is a reconnect.
-    var reconnecting = false
     var waitLater, retryLater, helloLater, tooWideLater: DispatchWorkItem?
     /// The desktop's shape, from voxl's hello; Sharp's until then.
     var aspect: CGFloat = 4096.0 / 1728.0
@@ -364,7 +362,6 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         tooWide = false
         tooWideLater?.cancel()
         needsPassword = false
-        reconnecting = false
         keyBar.setArmed([])
         if !failing { showCover(label) }
         TestLog.shared.add("load", ["screen": label])
@@ -408,16 +405,28 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         DispatchQueue.main.asyncAfter(deadline: .now() + 7, execute: work)
     }
 
-    /// 10 s from a load, or from the page losing its socket, with no hello: a fresh web view.
+    /// 10 s from a load, or from the page losing its socket, with no hello: a fresh web view. Not while
+    /// voxl's password waits for Dan.
     func watchHello() {
         helloLater?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.hello, self.answered else { return }
+            guard let self else { return }
+            self.helloLater = nil
+            guard !self.hello, self.answered, !self.needsPassword else { return }
             TestLog.shared.add("noHello")
             self.load()
         }
         helloLater = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
+    }
+
+    /// voxl answered this try (its page, or its password challenge): the cover no longer says it isn't.
+    func gotAnswer() {
+        answered = true
+        if failing {
+            failing = false
+            showCover(label)
+        }
     }
 
     func notAnswering() {
@@ -519,12 +528,8 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
 
     func webView(_ w: WKWebView, didCommit n: WKNavigation!) {
         guard w === web else { return }
-        answered = true
         committed = true
-        if failing {
-            failing = false
-            showCover(label)
-        }
+        gotAnswer()
         updateAudio()
     }
 
@@ -537,8 +542,10 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     /// A voxl that keeps a password: Password answers, with the sheet if it must ask. Being asked is an answer.
     func webView(_ w: WKWebView, didReceive ch: URLAuthenticationChallenge,
                  completionHandler done: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        // Dan cancelled the sheet: the socket's own retries don't ask again until he taps Sign in.
+        if w === web, needsPassword { return done(.cancelAuthenticationChallenge, nil) }
         if w === web {
-            answered = true
+            gotAnswer()
             // Nothing tries again while the sheet waits for Dan; the watch starts over once he answers.
             helloLater?.cancel()
             waitLater?.cancel()
@@ -640,11 +647,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
                 // Sharp again before a frame: the cover goes back to saying it connects.
                 showCover(label)
             }
-            // voxl lets go of every key and button when a socket closes, but one that went silent is still
-            // open on the Mac, so a button held through it stays down. Every connection starts by letting go
-            // (voxl's own release-all; this page holds nothing yet), then a modifier tapped on the bar while
-            // this page loaded reaches it.
-            run("dispatchEvent(new Event('blur'))")
+            // A modifier tapped on the bar while this page loaded reaches it now.
             keyBar.resend()
         case "picture":
             picture = true
@@ -663,11 +666,16 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
             TestLog.shared.add("socket", ["s": s])
             if s == "closed" {
                 hello = false
-                reconnecting = true
-                watchHello()
-            } else if s == "open", reconnecting {
-                reconnecting = false
-                release()
+                // A wide hello whose connection is gone says nothing about the next one.
+                tooWideLater?.cancel()
+                // voxl's page tries again every second: the 10 s count from the first close.
+                if helloLater == nil || helloLater?.isCancelled == true { watchHello() }
+            } else if s == "open" {
+                // voxl lets go of every key and button when a socket closes, but one that went silent is
+                // still open on the Mac, so a key or button held through it stays down. Every connection
+                // starts by letting go (voxl's own release-all). The bar's modifiers stay armed: they go
+                // down with the next key.
+                run("dispatchEvent(new Event('blur'))")
             }
         case "stats":
             stats = body
