@@ -1133,9 +1133,11 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     /// The view follows the window. Moved to another of the machine's screens, that screen comes on
     /// view showing it; closed or minimized, the whole screen.
     func askWhere() {
-        guard case .window(let id, let app, let box) = part else { return }
+        guard !asking, case .window(let id, let app, let box) = part else { return }
         let turn = partTurn, url = screen.url
+        asking = true
         windowCall(page(row), "/window/\(id)") { [weak self] status, j in
+            self?.asking = false
             guard let self, turn == self.partTurn else { return }
             if status == 404 {
                 return self.setPart(.whole, note: "\(app.isEmpty ? "The window" : app) closed or minimized: whole screen")
@@ -1155,6 +1157,8 @@ final class MachineWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, WKN
     }
 
     var fitAsked = Date.distantPast
+    /// A question about the window is on its way: the next waits for its answer.
+    var asking = false
 
     /// Has voxl give the part's window this window's shape, at the size chosen (FitSize).
     func fitWindow() {
