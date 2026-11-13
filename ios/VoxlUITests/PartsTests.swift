@@ -2,8 +2,7 @@ import XCTest
 
 /// Part of a screen, end to end: the screen's tab tapped again steps Left, Right, the window under the
 /// Mac's pointer (fitted to the picture's room) and Whole (the window put back); the picture takes
-/// each part's shape. (XCUITest's F1 doesn't reach the app, and on an iPad the tabs aren't in the
-/// accessibility tree while the picture plays: run it on an iPhone simulator.) Needs a voxl with the window routes on
+/// each part's shape. (XCUITest's F1 doesn't reach the app.) Needs a voxl with the window routes on
 /// localhost:6951 whose pointer is over a window the test may resize (PARTS_VOXL sets another address):
 /// ONLY=PartsTests ios/build.sh uitest.
 final class PartsTests: XCTestCase {
