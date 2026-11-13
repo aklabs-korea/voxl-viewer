@@ -1,5 +1,5 @@
 // The keyboard while a viewer window is in front, through a low-level keyboard hook:
-// - Keys other programs inject go nowhere. voxl on this PC types what someone viewing the PC
+// - Keys voxl injects go nowhere. voxl on this PC types what someone viewing the PC
 //   types; in front of this window that would go on to the remote, which may be showing this PC,
 //   and a key could bounce PC -> remote -> PC forever.
 // - For a Mac machine, the Mac's Control key is the PC's Win key (voxl sends Win as Control and
@@ -39,6 +39,8 @@ sealed class WinKeys : IDisposable
 
     const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x100, WM_SYSKEYDOWN = 0x104;
     const uint WM_QUIT = 0x12, LLKHF_INJECTED = 0x10;
+    // voxl's src/win/input.rs, claude-home voxl/patches/0013-mark-typed-keys.patch.
+    const nuint VOXL_KEY_MARK = 0x766F786C;
     const uint VK_LWIN = 0x5B, VK_RWIN = 0x5C;
     const uint VK_HANGUL = 0x15, VK_HANJA = 0x19, VK_PROCESSKEY = 0xE5;
     const uint VK_LSHIFT = 0xA0, VK_RSHIFT = 0xA1, VK_LCONTROL = 0xA2, VK_RCONTROL = 0xA3, VK_LMENU = 0xA4, VK_RMENU = 0xA5;
@@ -57,8 +59,8 @@ sealed class WinKeys : IDisposable
     readonly object sync = new();
     readonly HashSet<uint> held = new();      // keys down right now, as the hook saw them
     readonly HashSet<uint> swallowed = new(); // keys whose key-down Windows never saw: their key-up goes the same way
-    readonly HashSet<uint> bounced = new();   // injected keys dropped: their key-ups too
-    readonly HashSet<uint> injected = new();  // injected keys let through: their repeats and key-ups too
+    readonly HashSet<uint> bounced = new();   // voxl keys dropped: their key-ups too
+    readonly HashSet<uint> injected = new();  // voxl keys let through: their repeats and key-ups too
     readonly ConcurrentQueue<Key> queue = new();
     int pending;                              // replays queued but not yet in the page
     bool draining;
@@ -95,9 +97,11 @@ sealed class WinKeys : IDisposable
                 var k = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
                 var msg = (int)wParam;
                 var down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+                var injectedKey = (k.flags & LLKHF_INJECTED) != 0;
                 bool swallow;
                 lock (sync)
-                    swallow = (k.flags & LLKHF_INJECTED) != 0 ? DecideInjected(k.vkCode, down) : Decide(k.vkCode, k.scanCode, down);
+                    swallow = injectedKey && k.extraInfo == VOXL_KEY_MARK
+                        ? DecideInjected(k.vkCode, down) : Decide(k.vkCode, k.scanCode, down, injectedKey);
                 if (swallow) return 1;
             }
         }
@@ -110,16 +114,17 @@ sealed class WinKeys : IDisposable
 
     bool InFront => FormHandle != IntPtr.Zero && GetForegroundWindow() == FormHandle;
 
-    // On the hook thread, under the lock, for the keyboard's own keys. true: Windows never sees
+    // On the hook thread, under the lock, for the user's keys. true: Windows never sees
     // this key event. Written to keys.log while the window is in front, repeats left out.
-    bool Decide(uint vk, uint scan, bool down)
+    bool Decide(uint vk, uint scan, bool down, bool retyped)
     {
+        var typed = retyped ? ", typed by another program" : "";
         if (!down)
         {
             held.Remove(vk);
             var replay = swallowed.Remove(vk);
             if (replay) Enqueue(vk, scan, false, false);
-            if (InFront) Log(vk, "up", replay ? "replay" : "pass");
+            if (InFront) Log(vk, "up", (replay ? "replay" : "pass") + typed);
             return replay;
         }
         if (!held.Add(vk)) // autorepeat
@@ -130,8 +135,8 @@ sealed class WinKeys : IDisposable
             return true;
         }
         if (!InFront) return false;
-        if (!Mac) return Log(vk, "down", "pass");
-        if (vk is VK_HANGUL or VK_HANJA or VK_PROCESSKEY) return Log(vk, "down", "pass, the IME's key");
+        if (!Mac) return Log(vk, "down", "pass" + typed);
+        if (vk is VK_HANGUL or VK_HANJA or VK_PROCESSKEY) return Log(vk, "down", "pass, the IME's key" + typed);
         var winHeld = swallowed.Contains(VK_LWIN) || swallowed.Contains(VK_RWIN);
         // While replays are still on their way, later keys join them: a key typed right after a Win
         // chord must not reach the page before the chord's key-ups, or the Mac sees Control+key.
@@ -139,10 +144,10 @@ sealed class WinKeys : IDisposable
         {
             swallowed.Add(vk);
             Enqueue(vk, scan, true, false);
-            Log(vk, "down", vk is VK_LWIN or VK_RWIN ? "replay" : winHeld ? "replay, Win held" : "replay, behind earlier replays");
+            Log(vk, "down", (vk is VK_LWIN or VK_RWIN ? "replay" : winHeld ? "replay, Win held" : "replay, behind earlier replays") + typed);
             return true;
         }
-        return Log(vk, "down", "pass");
+        return Log(vk, "down", "pass" + typed);
     }
 
     // keys.log: "M3 hook down LWin replay". false, for a key that passes.
@@ -152,7 +157,7 @@ sealed class WinKeys : IDisposable
         return false;
     }
 
-    // On the hook thread, under the lock, for keys another program injected. While the window is in
+    // On the hook thread, under the lock, for keys voxl injected. While the window is in
     // front they go nowhere; a key's repeats and key-up go the way its key-down went, so Windows
     // never sees a key stuck down.
     bool DecideInjected(uint vk, bool down)
@@ -169,7 +174,7 @@ sealed class WinKeys : IDisposable
             return false;
         }
         bounced.Add(vk);
-        KeyLog.Write($"{form.Machine.Name} hook down {KeyLog.Name(vk)} dropped, typed by another program");
+        KeyLog.Write($"{form.Machine.Name} hook down {KeyLog.Name(vk)} dropped, typed by voxl");
         return true;
     }
 
