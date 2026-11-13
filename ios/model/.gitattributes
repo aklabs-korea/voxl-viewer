@@ -1,0 +1,2 @@
+# check.sh holds multi-line strings, so a CRLF checkout on Windows would break it.
+* text eol=lf

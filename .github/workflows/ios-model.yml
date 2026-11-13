@@ -1,0 +1,31 @@
+# Model-checks the iPhone/iPad app (ios/model, skill voxl-ios-model) on every pull request that
+# touches the app's code, the models, the skill or this workflow. check.sh installs TLC and Java
+# with mise, compares every verdict with its baseline, and fails (exit 3) when the files in
+# ios/Voxl no longer match ios/model/covered.sha256 (a hash of the checked-out files, so a
+# shallow checkout is enough).
+name: iOS model
+
+on:
+  pull_request:
+    paths:
+      - ios/Voxl/**
+      - ios/model/**
+      - .claude/skills/voxl-ios-model/**
+      - .github/workflows/ios-model.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+
+      - name: Model-check
+        run: ios/model/check.sh
