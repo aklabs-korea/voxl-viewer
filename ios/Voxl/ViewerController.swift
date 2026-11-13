@@ -47,7 +47,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     var coverAction = CoverAction.none
     /// This page's socket closed once: the next open is a reconnect.
     var reconnecting = false
-    var waitLater, retryLater, helloLater: DispatchWorkItem?
+    var waitLater, retryLater, helloLater, tooWideLater: DispatchWorkItem?
     /// The desktop's shape, from voxl's hello; Sharp's until then.
     var aspect: CGFloat = 4096.0 / 1728.0
 
@@ -362,6 +362,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         hello = false
         picture = false
         tooWide = false
+        tooWideLater?.cancel()
         needsPassword = false
         reconnecting = false
         keyBar.setArmed([])
@@ -383,7 +384,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         web = nil
         loaded = nil
         committed = false
-        [waitLater, retryLater, helloLater].forEach { $0?.cancel() }
+        [waitLater, retryLater, helloLater, tooWideLater].forEach { $0?.cancel() }
         TestLog.shared.add("closed")
     }
 
@@ -620,10 +621,19 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
                 if let saved = views[url.absoluteString], saved.desk == size { pointer.state = saved } else { pointer.reset(desk: size) }
             }
             TestLog.shared.add("hello", ["w": w, "h": h, "os": body["os"] as? String ?? ""])
+            // Every connection first hears the screen's current size, and Full until this page's Sharp
+            // request lands (about half a second, measured on the Duo): too wide counts only if it stays.
             tooWide = w > 4096
+            tooWideLater?.cancel()
             if tooWide {
-                showCover("Another viewer asked \(screen?.name ?? "") for Full (\(Int(w)) px wide). This app plays up to Sharp (4096).",
-                          button: "Ask for Sharp", action: .sharp)
+                let name = screen?.name ?? ""
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.tooWide else { return }
+                    self.showCover("Another viewer asked \(name) for Full (\(Int(w)) px wide). This app plays up to Sharp (4096).",
+                                   button: "Ask for Sharp", action: .sharp)
+                }
+                tooWideLater = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
             } else if picture {
                 cover.hide()
             }
