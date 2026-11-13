@@ -40,6 +40,8 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
     var failing = false
     /// The picture is wider than the phone plays (another viewer asked for Full).
     var tooWide = false
+    /// Dan cancelled voxl's password sheet: nothing tries again until he asks.
+    var needsPassword = false
     var waitLater, retryLater, helloLater: DispatchWorkItem?
     /// The desktop's shape, from voxl's hello; Sharp's until then.
     var aspect: CGFloat = 4096.0 / 1728.0
@@ -354,6 +356,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         hello = false
         picture = false
         tooWide = false
+        needsPassword = false
         if !failing { cover.show(label) }
         TestLog.shared.add("load", ["screen": label])
         waitThenCheck()
@@ -429,6 +432,7 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
 
     func coverButton() {
         if machines.isEmpty { return showMachines() }
+        if needsPassword { return load() }
         if failing, let m = machine, m.screens.count > 1 { return go(to: row == 0 ? 1 : 0) }
         // The picture is wider than this app plays: this screen asks for Sharp from now on.
         if let screen, screen.sharp == nil {
@@ -504,6 +508,22 @@ final class ViewerController: UIViewController, WKNavigationDelegate, WKUIDelega
         guard w === web else { return }
         TestLog.shared.add("webProcessEnded")
         load()
+    }
+
+    /// A voxl that keeps a password: Password answers, with the sheet if it must ask. Being asked is an answer.
+    func webView(_ w: WKWebView, didReceive ch: URLAuthenticationChallenge,
+                 completionHandler done: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if w === web { answered = true }
+        Password.answer(ch, over: self, name: label) { [weak self] d, c in
+            // Cancelled: no new try every 10 s; the cover offers to sign in again.
+            if d == .cancelAuthenticationChallenge, let self, w === self.web {
+                self.helloLater?.cancel()
+                self.waitLater?.cancel()
+                self.needsPassword = true
+                self.cover.show("\(self.screen?.name ?? "This screen") needs its voxl password.", button: "Sign in")
+            }
+            done(d, c)
+        }
     }
 
     func webView(_ w: WKWebView, decidePolicyFor r: WKNavigationResponse,
